@@ -1,69 +1,45 @@
-# React + TypeScript + Vite
+# Avatar Companion
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Mobile-first 3D avatar foundation built with React, Capacitor, Three.js, React Three Fiber, and VRM.
 
-Currently, two official plugins are available:
+## Current milestone
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+The original geo voice memo/map prototype has been retired. The app now focuses on an extensible avatar runtime with a clean behavior boundary.
 
-## Expanding the ESLint configuration
+Implemented foundation:
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- full-screen mobile 3D stage
+- procedural fallback humanoid so the project can render before a production model is selected
+- optional VRM loading path via `@pixiv/three-vrm`
+- normalized avatar commands: `idle`, `wave`, `nod`, `shakeHead`, `talk`
+- procedural idle motion and blinking foundation
+- mobile orbit/zoom controls
+- behavior types separated from rendering so voice and AI can be added without coupling them to bones
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Run
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+For a production build:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
+npx cap sync ios
 ```
+
+## VRM model
+
+`AvatarScene` accepts an optional `modelUrl`. When omitted, the procedural fallback avatar is rendered. A production `.vrm` asset can be placed under `public/avatar/` and passed to the scene, for example `/avatar/companion.vrm`.
+
+Do not commit a third-party VRM unless its license permits redistribution.
+
+## Roadmap
+
+1. Select and integrate a production VRM model.
+2. Add retargetable animation clips and an animation state machine.
+3. Add facial expression, gaze, and improved procedural motion.
+4. Add realtime voice input/output and viseme-based lip sync.
+5. Add an AI behavior planner that emits semantic actions and emotions rather than bone rotations.
