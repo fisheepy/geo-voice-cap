@@ -1,8 +1,17 @@
-export type AvatarAction = "idle" | "wave" | "nod" | "shakeHead" | "talk";
-export type AvatarEmotion = "neutral" | "happy" | "sad" | "surprised";
+export type AvatarAction =
+  | "idle"
+  | "listening"
+  | "thinking"
+  | "talk"
+  | "wave"
+  | "nod"
+  | "shakeHead"
+  | "celebrate";
+
+export type AvatarEmotion = "neutral" | "happy" | "thoughtful" | "excited";
 
 export type AvatarCommand = {
   action: AvatarAction;
-  emotion?: AvatarEmotion;
+  emotion: AvatarEmotion;
   nonce: number;
 };

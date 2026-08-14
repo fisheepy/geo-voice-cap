@@ -9,7 +9,12 @@ lerna-debug.log*
 
 node_modules
 dist
+avatar-lab/
+voice-samples/
 dist-ssr
+test-artifacts
+.edge-headless
+avatar-mobile.png
 *.local
 
 # Editor directories and files

@@ -1,12 +1,17 @@
 {
-  "name": "avatar-companion",
+  "name": "mira-avatar-companion",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node server.mjs",
+    "dev:vite": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:persona": "node tests/persona.mjs",
+    "test:smoke": "node tests/smoke.mjs",
+    "test:realtime": "node tests/realtime.mjs",
+    "voice:create:cartesia": "node tools/create-cartesia-voice.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,6 +20,8 @@
     "@pixiv/three-vrm": "^3.4.2",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.3.0",
+    "express": "^5.2.1",
+    "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "three": "^0.179.1"
@@ -30,6 +37,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^16.3.0",
+    "playwright": "^1.62.1",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.39.1",
     "vite": "^7.1.2"
