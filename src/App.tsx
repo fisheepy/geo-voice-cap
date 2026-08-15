@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { CSSProperties } from "react";
 import {
   AlertCircle,
-  AudioLines,
   CheckCircle2,
-  Hand,
-  Menu,
-  MessageCircle,
+  History,
+  MapPin,
   Mic,
   MicOff,
   RotateCcw,
-  Send,
   Sparkles,
   Upload,
   UserRoundCog,
@@ -21,6 +18,7 @@ import {
 import { AvatarScene } from "./avatar/AvatarScene";
 import { formatAvatarSize, loadAvatar, removeAvatar, saveAvatar, validateVrmFile } from "./avatar/avatarStorage";
 import type { StoredAvatar } from "./avatar/avatarStorage";
+import { deriveAvatarReaction } from "./avatar/reactions";
 import type { AvatarAction, AvatarCommand, AvatarEmotion } from "./avatar/types";
 import { RealtimeConversation } from "./realtime/RealtimeConversation";
 import type { RealtimePhase } from "./realtime/RealtimeConversation";
@@ -32,6 +30,7 @@ type BundledAvatarId = "mira" | "kai";
 type KaiOutfitId = "everyday" | "smart" | "weekend";
 type VoiceMode = "openai-built-in" | "openai-custom" | "cartesia";
 type VoiceModes = Record<BundledAvatarId, VoiceMode>;
+type SceneId = "office" | "gym" | "beach" | "nature" | "cafe";
 type BundledAvatar = {
   id: BundledAvatarId;
   name: string;
@@ -50,10 +49,17 @@ type KaiOutfit = {
   size: number;
   colors: string[];
 };
+type SceneOption = {
+  id: SceneId;
+  name: string;
+  description: string;
+  image: string;
+  position: string;
+};
 
-const quickPrompts = ["帮我规划今天", "帮我专注下来", "说一句鼓励我的话"];
 const BUNDLED_AVATAR_STORAGE_KEY = "mira-bundled-avatar";
 const KAI_OUTFIT_STORAGE_KEY = "kai-outfit";
+const SCENE_STORAGE_KEY = "mira-background-scene";
 const DEFAULT_VOICE_MODES: VoiceModes = { kai: "openai-built-in", mira: "openai-built-in" };
 const BUNDLED_AVATARS: Record<BundledAvatarId, BundledAvatar> = {
   mira: {
@@ -104,6 +110,13 @@ const KAI_OUTFITS: Record<KaiOutfitId, KaiOutfit> = {
     colors: ["#48675a", "#d7c4a3", "#4a2d1d"],
   },
 };
+const SCENES: Record<SceneId, SceneOption> = {
+  office: { id: "office", name: "公司", description: "清爽工作室", image: "/scenes/office.jpg", position: "center center" },
+  gym: { id: "gym", name: "健身房", description: "明亮训练空间", image: "/scenes/gym.jpg", position: "center center" },
+  beach: { id: "beach", name: "沙滩", description: "安静海湾", image: "/scenes/beach.jpg", position: "center center" },
+  nature: { id: "nature", name: "自然风光", description: "湖畔林间", image: "/scenes/nature.jpg", position: "center center" },
+  cafe: { id: "cafe", name: "咖啡馆", description: "午后咖啡馆", image: "/scenes/cafe.jpg", position: "center center" },
+};
 
 function readBundledAvatarId(): BundledAvatarId {
   return localStorage.getItem(BUNDLED_AVATAR_STORAGE_KEY) === "mira" ? "mira" : "kai";
@@ -114,16 +127,13 @@ function readKaiOutfitId(): KaiOutfitId {
   return stored === "smart" || stored === "weekend" ? stored : "everyday";
 }
 
+function readSceneId(): SceneId {
+  const stored = localStorage.getItem(SCENE_STORAGE_KEY);
+  return stored === "office" || stored === "gym" || stored === "beach" || stored === "nature" ? stored : "cafe";
+}
+
 function createInitialMessages(name: string): Message[] {
   return [{ id: 1, speaker: "mira", text: `你好，我是${name}。今天想和我聊些什么？` }];
-}
-
-function replyEmotion(value: unknown): AvatarEmotion {
-  return value === "neutral" || value === "happy" || value === "thoughtful" || value === "excited" ? value : "happy";
-}
-
-function replyAction(value: unknown): AvatarAction {
-  return value === "talk" || value === "nod" || value === "wave" || value === "celebrate" || value === "idle" ? value : "talk";
 }
 
 async function loadVoiceModes(): Promise<VoiceModes> {
@@ -147,14 +157,16 @@ export default function App() {
         size: selectedKaiOutfit.size,
       }
     : baseBundledAvatar;
-  const [command, setCommand] = useState<AvatarCommand>({ action: "wave", emotion: "happy", nonce: 1 });
+  const [sceneId, setSceneId] = useState<SceneId>(readSceneId);
+  const selectedScene = SCENES[sceneId];
+  const [command, setCommand] = useState<AvatarCommand>({ action: "wave", emotion: "happy", speaking: false, nonce: 1 });
   const [messages, setMessages] = useState<Message[]>(() => createInitialMessages(BUNDLED_AVATARS[readBundledAvatarId()].name));
-  const [draft, setDraft] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [realtimePhase, setRealtimePhase] = useState<RealtimePhase>("disconnected");
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [conversationOpen, setConversationOpen] = useState(false);
   const [avatarPanelOpen, setAvatarPanelOpen] = useState(false);
+  const [scenePanelOpen, setScenePanelOpen] = useState(false);
   const [avatarRecord, setAvatarRecord] = useState<StoredAvatar | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string>();
   const [avatarNotice, setAvatarNotice] = useState("");
@@ -185,6 +197,11 @@ export default function App() {
   const latestAssistantMessage = [...messages].reverse().find((message) => message.speaker === "mira")?.text ?? "";
   const handleAvatarReady = useCallback(() => setAvatarReady(true), []);
 
+  const stageStyle = {
+    "--scene-image": `url(${selectedScene.image})`,
+    "--scene-position": selectedScene.position,
+  } as CSSProperties;
+
   useEffect(() => {
     let active = true;
     loadAvatar()
@@ -207,6 +224,10 @@ export default function App() {
         if (active) setVoiceModes(modes);
       })
       .catch(() => undefined);
+    for (const scene of Object.values(SCENES)) {
+      const image = new Image();
+      image.src = scene.image;
+    }
     const timers = timersRef.current;
     return () => {
       active = false;
@@ -286,8 +307,18 @@ export default function App() {
     animate("wave", "happy");
   };
 
-  const animate = (action: AvatarAction, emotion: AvatarEmotion = command.emotion) => {
-    setCommand((current) => ({ action, emotion, nonce: current.nonce + 1 }));
+  const selectScene = (id: SceneId) => {
+    setSceneId(id);
+    localStorage.setItem(SCENE_STORAGE_KEY, id);
+    setScenePanelOpen(false);
+  };
+
+  const animate = (action: AvatarAction, emotion: AvatarEmotion = command.emotion, speaking = false) => {
+    setCommand((current) => ({ action, emotion, speaking, nonce: current.nonce + 1 }));
+  };
+
+  const setSpeaking = (speaking: boolean, emotion?: AvatarEmotion) => {
+    setCommand((current) => ({ ...current, speaking, emotion: emotion ?? current.emotion }));
   };
 
   const speak = (
@@ -297,7 +328,7 @@ export default function App() {
     useExternalVoice = externalVoiceEnabled,
   ) => {
     const requestId = ++speechRequestRef.current;
-    animate(leadAction, emotion);
+    animate(leadAction, emotion, false);
     window.speechSynthesis?.cancel();
     customAudioRef.current?.pause();
     customAudioRef.current = null;
@@ -314,7 +345,7 @@ export default function App() {
         URL.revokeObjectURL(customAudioUrlRef.current);
         customAudioUrlRef.current = null;
       }
-      animate("idle", emotion);
+      animate("idle", emotion, false);
       if (realtimeRef.current) setRealtimePhase("connected");
     };
     const speakWithBrowser = () => {
@@ -336,7 +367,7 @@ export default function App() {
       const chineseVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("zh"));
       utterance.voice = chineseVoices.find((voice) => preferredVoice.test(voice.name)) ?? chineseVoices[0] ?? voices[0] ?? null;
       utterance.onstart = () => {
-        animate("talk", emotion);
+        setSpeaking(true, emotion);
         if (realtimeRef.current) setRealtimePhase("speaking");
       };
       utterance.onend = finish;
@@ -373,7 +404,7 @@ export default function App() {
         customAudioRef.current = audio;
         customAudioUrlRef.current = audioUrl;
         audio.onplay = () => {
-          animate("talk", emotion);
+          setSpeaking(true, emotion);
           if (realtimeRef.current) setRealtimePhase("speaking");
         };
         audio.onended = finish;
@@ -385,55 +416,6 @@ export default function App() {
         if (requestId === speechRequestRef.current) speakWithBrowser();
       }
     })();
-  };
-
-  const submitPrompt = async (rawPrompt: string) => {
-    const prompt = rawPrompt.trim();
-    if (!prompt || isThinking) return;
-    setDraft("");
-    setSpeechNotice("");
-    setConversationOpen(true);
-    const nextMessages = [...messages, { id: messageIdRef.current++, speaker: "user" as const, text: prompt }];
-    setMessages(nextMessages);
-    setIsThinking(true);
-    animate("thinking", "thoughtful");
-
-    if (realtimeRef.current?.sendText(prompt)) return;
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          persona: bundledAvatarId,
-          messages: nextMessages.map((message) => ({
-            role: message.speaker === "user" ? "user" : "assistant",
-            text: message.text,
-          })),
-          context: {
-            locale: navigator.language || "zh-CN",
-            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            localTime: new Date().toISOString(),
-          },
-        }),
-      });
-      const body = await response.json();
-      if (!response.ok || typeof body.text !== "string") {
-        throw new Error(body.error ?? "AI 没有返回有效回复。");
-      }
-      setMessages((current) => [...current, { id: messageIdRef.current++, speaker: "mira", text: body.text }]);
-      setIsThinking(false);
-      speak(body.text, replyEmotion(body.emotion), replyAction(body.action));
-    } catch (error) {
-      setIsThinking(false);
-      animate("idle", "neutral");
-      setSpeechNotice(error instanceof Error ? error.message : "暂时无法连接 AI 服务。");
-    }
-  };
-
-  const handleSubmit = (event: FormEvent) => {
-    event.preventDefault();
-    void submitPrompt(draft);
   };
 
   const stopListening = () => {
@@ -458,8 +440,9 @@ export default function App() {
       return;
     }
     setSpeechNotice("");
-    setConversationOpen(true);
+    setConversationOpen(false);
     setAvatarPanelOpen(false);
+    setScenePanelOpen(false);
     window.speechSynthesis?.cancel();
     customAudioRef.current?.pause();
     customAudioRef.current = null;
@@ -487,27 +470,31 @@ export default function App() {
           animate("thinking", "thoughtful");
         } else if (phase === "speaking") {
           setIsThinking(false);
-          animate("talk", "happy");
+          setCommand((current) => ({
+            action: current.action === "thinking" || current.action === "listening" || current.action === "idle" ? "talk" : current.action,
+            emotion: current.emotion === "neutral" ? "happy" : current.emotion,
+            speaking: true,
+            nonce: current.nonce + 1,
+          }));
         } else if (phase === "connected" || phase === "disconnected") {
           setIsThinking(false);
-          animate("idle", "neutral");
+          animate("idle", "neutral", false);
         }
       },
       onUserTranscript: (text) => {
-        setConversationOpen(true);
         setMessages((current) => [...current, { id: messageIdRef.current++, speaker: "user", text }]);
       },
       onAssistantTranscript: (text) => {
+        const reaction = deriveAvatarReaction(text);
         setMessages((current) => [...current, { id: messageIdRef.current++, speaker: "mira", text }]);
         setIsThinking(false);
-        if (useExternalVoice) speak(text, "happy", "talk", true);
-        else animate("talk", "happy");
+        if (useExternalVoice) speak(text, reaction.emotion, reaction.action, true);
+        else animate(reaction.action, reaction.emotion, true);
       },
       onError: (message) => {
         setSpeechNotice(message);
-        setConversationOpen(true);
         setIsThinking(false);
-        animate("idle", "neutral");
+        animate("idle", "neutral", false);
       },
     });
     realtimeRef.current = realtime;
@@ -517,7 +504,7 @@ export default function App() {
       if (realtimeRef.current === realtime) realtimeRef.current = null;
       setRealtimePhase("disconnected");
       setIsThinking(false);
-      animate("idle", "neutral");
+      animate("idle", "neutral", false);
       const errorName = error instanceof DOMException ? error.name : "";
       const notice = errorName === "NotAllowedError" || errorName === "SecurityError"
         ? "麦克风权限已被阻止。请在浏览器的网站设置中允许麦克风访问，然后重试。"
@@ -542,7 +529,7 @@ export default function App() {
           URL.revokeObjectURL(customAudioUrlRef.current);
           customAudioUrlRef.current = null;
         }
-        animate("idle", "neutral");
+        animate("idle", "neutral", false);
       }
       realtimeRef.current?.setMuted(!next || externalVoiceEnabled);
       return next;
@@ -551,7 +538,14 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <section className="avatar-stage" aria-label={`${personaName}角色`}>
+      <section
+        className="avatar-stage"
+        style={stageStyle}
+        aria-label={`${personaName}角色`}
+        data-scene={sceneId}
+        data-avatar-action={command.action}
+        data-avatar-emotion={command.emotion}
+      >
         <header className="topbar">
           <div className="brand-lockup">
             <span className="brand-mark"><Sparkles size={16} strokeWidth={2.2} /></span>
@@ -565,6 +559,19 @@ export default function App() {
               className="icon-button"
               onClick={() => {
                 setConversationOpen(false);
+                setAvatarPanelOpen(false);
+                setScenePanelOpen((open) => !open);
+              }}
+              aria-label={`选择场景，当前${selectedScene.name}`}
+              title="选择场景"
+            >
+              {scenePanelOpen ? <X size={20} /> : <MapPin size={19} />}
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => {
+                setConversationOpen(false);
+                setScenePanelOpen(false);
                 setAvatarPanelOpen((open) => !open);
               }}
               aria-label="选择角色"
@@ -577,14 +584,17 @@ export default function App() {
             </button>
             <button className="icon-button conversation-toggle" onClick={() => {
               setAvatarPanelOpen(false);
+              setScenePanelOpen(false);
               setConversationOpen((open) => !open);
-            }} aria-label="打开对话" title="对话">
-              {conversationOpen ? <X size={20} /> : <Menu size={20} />}
+            }} aria-label="打开语音记录" title="语音记录">
+              {conversationOpen ? <X size={20} /> : <History size={19} />}
             </button>
           </div>
         </header>
 
         <div className="scene-wrap">
+          <div className="scene-background" aria-hidden="true" />
+          <div className="scene-wash" aria-hidden="true" />
           <AvatarScene command={command} modelUrl={avatarUrl ?? bundledAvatar.url} onReady={handleAvatarReady} />
           {!avatarReady && <div className="avatar-loading" role="status"><span />正在准备{personaName}</div>}
           <div className="scene-glow" />
@@ -592,30 +602,25 @@ export default function App() {
             <span className="caption-label">{isThinking ? `${personaName}正在思考` : personaName}</span>
             <p>{isThinking ? <><i /><i /><i /></> : latestAssistantMessage}</p>
           </div>
-          <span className="scene-hint">拖动查看</span>
         </div>
 
         <div className="bottom-controls">
-          <div className="quick-actions" aria-label="角色动作">
-            <button onClick={() => animate("wave", "happy")} title="挥手"><Hand size={18} /><span>挥手</span></button>
-            <button onClick={() => animate("nod", "happy")} title="点头"><MessageCircle size={18} /><span>点头</span></button>
-            <button onClick={() => animate("celebrate", "excited")} title="庆祝"><Sparkles size={18} /><span>庆祝</span></button>
-          </div>
           <button className={`mic-button ${isVoiceActive ? "listening" : ""}`} onClick={startListening} aria-label={isVoiceActive ? "结束语音对话" : `和${personaName}说话`}>
             <span className="mic-ripple" />
             {isVoiceActive ? <MicOff size={25} /> : <Mic size={25} />}
           </button>
           <span className="mic-label">{voiceStatusLabel[realtimePhase]}</span>
+          {speechNotice && <p className="speech-notice" role="alert"><AlertCircle size={14} />{speechNotice}</p>}
         </div>
       </section>
 
-      <aside className={`conversation-panel ${conversationOpen ? "open" : ""}`} aria-label="对话">
+      <aside className={`conversation-panel ${conversationOpen ? "open" : ""}`} aria-label="语音记录">
         <div className="panel-header">
           <div>
-            <span className="panel-kicker">对话</span>
-            <h2>和{personaName}聊天</h2>
+            <span className="panel-kicker">语音记录</span>
+            <h2>{personaName}和你</h2>
           </div>
-          <button className="icon-button panel-close" onClick={() => setConversationOpen(false)} aria-label="关闭对话"><X size={19} /></button>
+          <button className="icon-button panel-close" onClick={() => setConversationOpen(false)} aria-label="关闭语音记录"><X size={19} /></button>
         </div>
 
         <div className="messages" aria-live="polite">
@@ -627,20 +632,36 @@ export default function App() {
           ))}
           {isThinking && <div className="message mira pending"><span>{personaName}</span><p><i /><i /><i /></p></div>}
         </div>
+      </aside>
 
-        <div className="prompt-area">
-          {messages.length < 3 && (
-            <div className="prompt-chips">
-              {quickPrompts.map((prompt) => <button key={prompt} onClick={() => void submitPrompt(prompt)}>{prompt}</button>)}
-            </div>
-          )}
-          {speechNotice && <p className="speech-notice">{speechNotice}</p>}
-          <form className="composer" onSubmit={handleSubmit}>
-            <AudioLines size={18} aria-hidden="true" />
-            <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={`给${personaName}发消息...`} aria-label={`给${personaName}发消息`} disabled={isThinking} />
-            <button type="submit" disabled={!draft.trim() || isThinking} aria-label="发送消息"><Send size={18} /></button>
-          </form>
-          <p className={`demo-note ${isVoiceActive ? "live" : ""}`}>{isVoiceActive ? (bundledAvatarId === "kai" ? "AI 生成语音 · 温柔青年男声" : "AI 生成语音 · 实时连接") : "AI 对话已就绪"}</p>
+      <aside className={`scene-panel ${scenePanelOpen ? "open" : ""}`} aria-label="场景选择">
+        <div className="panel-header">
+          <div>
+            <span className="panel-kicker">场景</span>
+            <h2>选择相处的地方</h2>
+          </div>
+          <button className="icon-button panel-close" onClick={() => setScenePanelOpen(false)} aria-label="关闭场景选择"><X size={19} /></button>
+        </div>
+        <div className="scene-panel-body">
+          <div className="scene-grid">
+            {(Object.values(SCENES) as SceneOption[]).map((scene) => {
+              const active = scene.id === sceneId;
+              return (
+                <button
+                  key={scene.id}
+                  type="button"
+                  className={`scene-option ${active ? "active" : ""}`}
+                  aria-label={`${scene.name} ${scene.description}`}
+                  aria-pressed={active}
+                  onClick={() => selectScene(scene.id)}
+                >
+                  <img src={scene.image} alt="" />
+                  <span><strong>{scene.name}</strong><small>{scene.description}</small></span>
+                  {active && <CheckCircle2 size={18} aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </aside>
 

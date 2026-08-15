@@ -1,5 +1,5 @@
-const REPLY_EMOTIONS = ["neutral", "happy", "thoughtful", "excited"];
-const REPLY_ACTIONS = ["talk", "nod", "wave", "celebrate", "idle"];
+const REPLY_EMOTIONS = ["neutral", "happy", "thoughtful", "excited", "concerned", "surprised"];
+const REPLY_ACTIONS = ["talk", "explain", "comfort", "nod", "wave", "celebrate", "idle"];
 
 export const companionReplyFormat = {
   type: "json_schema",
@@ -19,12 +19,12 @@ export const companionReplyFormat = {
       emotion: {
         type: "string",
         enum: REPLY_EMOTIONS,
-        description: "角色回应时的主要表情。",
+        description: "角色回应时的主要表情。安慰或承接难过时用 concerned，意外信息用 surprised。",
       },
       action: {
         type: "string",
         enum: REPLY_ACTIONS,
-        description: "角色开始回应时最合适的身体动作。",
+        description: "角色开始回应时最合适的身体动作。梳理建议用 explain，安慰共情用 comfort，庆祝只用于明确的好消息或成就。",
       },
     },
     required: ["message", "follow_up", "emotion", "action"],
@@ -76,7 +76,7 @@ export function createPersonaInstructions(persona, options = {}) {
   ].filter(Boolean).join("；");
   const outputContract = channel === "realtime"
     ? "这是实时语音对话。直接说出自然回复，不要输出 JSON、字段名、表情标签、括号动作或舞台说明。"
-    : "输出必须符合给定结构。message 只放不含问句的回应主体；follow_up 只能是一个简短问题，不需要追问时返回空字符串；emotion 选择主要表情；action 选择回应开头最自然的动作。不要在 message 或 follow_up 中解释结构化字段。";
+    : "输出必须符合给定结构。message 只放不含问句的回应主体；follow_up 只能是一个简短问题，不需要追问时返回空字符串；emotion 选择主要表情；action 选择回应开头最自然的动作。普通回应使用 talk，梳理或建议使用 explain，承接难过使用 comfort，明确庆祝时才使用 celebrate。不要在 message 或 follow_up 中解释结构化字段。";
 
   return [
     "# 身份与背景",

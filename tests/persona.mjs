@@ -41,6 +41,12 @@ assert.equal(
   parseCompanionReply('{"message":"坚持一个月真的很了不起。你现在感觉怎么样，哪里最让你骄傲","follow_up":"","emotion":"excited","action":"celebrate"}').text,
   "坚持一个月真的很了不起。",
 );
+assert.deepEqual(parseCompanionReply('{"message":"这段时间真的很不容易。","follow_up":"你愿意再说一点吗？","emotion":"concerned","action":"comfort"}'), {
+  text: "这段时间真的很不容易。\n你愿意再说一点吗？",
+  followUp: "你愿意再说一点吗？",
+  emotion: "concerned",
+  action: "comfort",
+});
 assert.throws(() => parseCompanionReply("not-json"));
 assert.equal(companionReplyFormat.schema.additionalProperties, false);
 

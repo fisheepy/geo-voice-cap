@@ -84,6 +84,21 @@ function ProceduralAvatar({ command, onReady }: { command: AvatarCommand; onRead
       leftForearmZ = 0.42;
       headY += Math.sin(t * 1.7) * 0.025;
     }
+    if (command.action === "explain") {
+      rightArmZ = -0.68 + Math.sin(t * 1.7) * 0.06;
+      rightForearmZ = -1.02 + Math.sin(t * 2.2) * 0.08;
+      leftArmZ = 0.2;
+      leftForearmZ = 0.28;
+      headY += 0.04;
+    }
+    if (command.action === "comfort") {
+      headZ = 0.07;
+      headY = 0.08;
+      rightArmZ = -0.3;
+      rightForearmZ = -0.54;
+      leftArmZ = 0.3;
+      leftForearmZ = 0.54;
+    }
     if (command.action === "celebrate" && elapsed < 2.7) {
       rightArmZ = -1.72;
       leftArmZ = 1.72;
@@ -110,7 +125,7 @@ function ProceduralAvatar({ command, onReady }: { command: AvatarCommand; onRead
       rightEye.current.scale.y = blink;
     }
     if (mouth.current) {
-      const talking = command.action === "talk" ? 0.8 + Math.sin(t * 13) * 0.45 : command.emotion === "happy" || command.emotion === "excited" ? 0.32 : 0.16;
+      const talking = command.speaking ? 0.8 + Math.sin(t * 13) * 0.45 : command.emotion === "happy" || command.emotion === "excited" ? 0.32 : command.emotion === "surprised" ? 0.48 : 0.16;
       mouth.current.scale.y = damp(mouth.current.scale.y, talking, 14);
       const material = mouth.current.material as MeshStandardMaterial;
       material.color.set(command.emotion === "happy" || command.emotion === "excited" ? "#8e443f" : "#6e4541");
@@ -301,6 +316,21 @@ function VrmAvatar({ command, modelUrl, onReady }: { command: AvatarCommand; mod
       leftUpperZ = -0.78 + Math.sin(t * 1.5) * 0.06;
       leftLowerZ = 0.42;
     }
+    if (command.action === "explain") {
+      rightUpperZ = 0.62 + Math.sin(t * 1.7) * 0.05;
+      rightLowerZ = -0.92 + Math.sin(t * 2.1) * 0.08;
+      leftUpperZ = -0.98;
+      leftLowerZ = 0.16;
+      headY += 0.04;
+    }
+    if (command.action === "comfort") {
+      headY += 0.08;
+      headZ += 0.065;
+      rightUpperZ = 0.76;
+      rightLowerZ = -0.46;
+      leftUpperZ = -0.76;
+      leftLowerZ = 0.46;
+    }
     if (command.action === "celebrate" && elapsed < 2.7) {
       rightUpperZ = -1.58;
       leftUpperZ = 1.58;
@@ -325,11 +355,12 @@ function VrmAvatar({ command, modelUrl, onReady }: { command: AvatarCommand; mod
     }
     const blinkCycle = t % 4.8;
     const blink = blinkCycle > 4.55 ? Math.sin(((blinkCycle - 4.55) / 0.25) * Math.PI) : 0;
-    const talking = command.action === "talk";
+    const talking = command.speaking;
     vrm.expressionManager?.setValue("blink", Math.max(0, blink));
     vrm.expressionManager?.setValue("happy", command.emotion === "excited" ? 0.46 : command.emotion === "happy" ? 0.26 : 0);
     vrm.expressionManager?.setValue("relaxed", command.emotion === "thoughtful" ? 0.22 : 0);
-    vrm.expressionManager?.setValue("surprised", command.emotion === "excited" ? 0.12 : 0);
+    vrm.expressionManager?.setValue("sad", command.emotion === "concerned" ? 0.16 : 0);
+    vrm.expressionManager?.setValue("surprised", command.emotion === "surprised" ? 0.24 : command.emotion === "excited" ? 0.12 : 0);
     vrm.expressionManager?.setValue("aa", talking ? Math.max(0, Math.sin(t * 12)) * 0.5 : 0);
     vrm.expressionManager?.setValue("ih", talking ? Math.max(0, Math.sin(t * 9 + 1.4)) * 0.22 : 0);
     vrm.expressionManager?.setValue("ou", talking ? Math.max(0, Math.sin(t * 7 + 2.1)) * 0.18 : 0);

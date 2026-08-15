@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:persona": "node tests/persona.mjs",
+    "test:reactions": "node tests/reactions.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:realtime": "node tests/realtime.mjs",
     "voice:create:cartesia": "node tools/create-cartesia-voice.mjs",

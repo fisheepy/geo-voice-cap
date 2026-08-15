@@ -7,11 +7,12 @@ A mobile-first, expressive 3D avatar MVP built with React, Capacitor, Three.js, 
 - Polished responsive avatar stage for desktop and mobile
 - Two selectable bundled VRM characters, Mira and Kai, with idle motion, blinking, mouth movement, expressive gestures, and a procedural error fallback
 - Three persistent Kai outfit variants: clean everyday, city commute, and weekend crossbody styling
-- Semantic behavior states: `idle`, `listening`, `thinking`, `talk`, `wave`, `nod`, `shakeHead`, and `celebrate`
-- OpenAI-powered text conversation with coordinated replies, emotion, speech, and animation
+- Five persistent AI-generated environments: office, gym, beach, nature, and cafe
+- Voice-only first-version interface with a readable transcript drawer and no text composer
+- Semantic behavior states including listening, thinking, explaining, comforting, greeting, agreement, and celebration
+- Content-aware reactions that coordinate facial emotion, body action, and mouth movement without an extra model call
 - Low-latency speech-to-speech conversation through the Realtime API and WebRTC
-- Browser speech synthesis fallback for typed replies, with mute control
-- Quick prompts and a responsive conversation panel
+- Custom-voice playback and browser speech synthesis fallback, with mute control
 - Local VRM 0.x/1.0 import, validation, persistence, and restore-to-bundled workflow
 - Normalized VRM framing, expressions, mouth shapes, and gesture control via `@pixiv/three-vrm`
 - Capacitor iOS project synchronized with the web build
@@ -44,11 +45,11 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. Microphone access requires localhost or HTTPS; a plain HTTP LAN URL still supports typed conversation but browsers will normally block its microphone.
+Open `http://localhost:5173`. Microphone access requires localhost or HTTPS; browsers will normally block voice input on a plain HTTP LAN URL.
 
 The app defaults to Simplified Chinese. Kai uses the `cedar` voice at a slightly slower pace with server-side style instructions for a gentle, clear young-adult male delivery. To use an approved custom voice later, set `OPENAI_KAI_VOICE_ID` to its voice ID; the built-in low-cost route remains the default.
 
-For an immediately available lower-cost custom voice, configure Cartesia. The server then asks OpenAI Realtime for text output and renders it through the selected Cartesia voice, so typed and microphone conversations share the same character voice without exposing either API key. The demo can use a public Mandarin voice on the free tier; creating a private clone requires a Cartesia plan with voice cloning enabled. OpenAI custom voice takes priority if both routes are configured. Recording direction, authorization rules, setup commands, and acceptance lines are in [`docs/kai-voice-recording.md`](docs/kai-voice-recording.md).
+For an immediately available lower-cost custom voice, configure Cartesia. The server then asks OpenAI Realtime for text output and renders it through the selected Cartesia voice without exposing either API key. The demo can use a public Mandarin voice on the free tier; creating a private clone requires a Cartesia plan with voice cloning enabled. OpenAI custom voice takes priority if both routes are configured. Recording direction, authorization rules, setup commands, and acceptance lines are in [`docs/kai-voice-recording.md`](docs/kai-voice-recording.md).
 
 Kai's detailed friend persona, relationship boundaries, conversation policy, and structured input/output contract are documented in [`docs/llm-companion-contract.md`](docs/llm-companion-contract.md). Text replies return coordinated `text`, `emotion`, and `action` fields; Realtime sessions use the same persona but speak naturally without structured labels.
 
@@ -58,11 +59,12 @@ Kai's detailed friend persona, relationship boundaries, conversation policy, and
 npm run build
 npm run lint
 npm run test:persona
+npm run test:reactions
 npm run test:smoke
 npm run test:realtime
 ```
 
-The smoke test uses a deterministic mocked response and does not spend API credits. `test:realtime` creates one real WebRTC session and one short model response, so it requires a configured key and incurs a small API charge. Screenshots are written to `test-artifacts/`.
+The smoke and reaction tests do not spend API credits. `test:realtime` creates one real WebRTC session, so it requires a configured key and may incur a small API charge. Screenshots are written to `test-artifacts/`.
 
 ## iOS
 
