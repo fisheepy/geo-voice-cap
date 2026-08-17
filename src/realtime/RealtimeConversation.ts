@@ -1,3 +1,5 @@
+import { apiUrl } from "../api.ts";
+
 export type RealtimePhase = "disconnected" | "connecting" | "connected" | "listening" | "thinking" | "speaking";
 
 type RealtimeEvent = {
@@ -23,7 +25,7 @@ type RealtimeEvent = {
 
 type Callbacks = {
   onPhase: (phase: RealtimePhase) => void;
-  onUserTranscript: (text: string) => void;
+  onUserTranscript?: (text: string) => void;
   onAssistantTranscript: (text: string) => void;
   onError: (message: string) => void;
 };
@@ -51,6 +53,7 @@ export class RealtimeConversation {
   private lastAssistantTranscript = "";
   private lastUserTranscript = "";
   private externalSpeech = false;
+  private inputResumeTimer?: number;
 
   constructor(callbacks: Callbacks) {
     this.callbacks = callbacks;
@@ -93,6 +96,7 @@ export class RealtimeConversation {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       this.microphone = microphone;
+      this.resumeInput();
       microphone.getTracks().forEach((track) => peer.addTrack(track, microphone));
 
       const channel = peer.createDataChannel("oai-events");
@@ -104,7 +108,7 @@ export class RealtimeConversation {
 
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      const sessionResponse = await fetch(`/api/realtime/session?persona=${encodeURIComponent(persona)}`, {
+      const sessionResponse = await fetch(apiUrl(`/api/realtime/session?persona=${encodeURIComponent(persona)}`), {
         method: "POST",
         headers: { "Content-Type": "application/sdp" },
         body: offer.sdp,
@@ -158,8 +162,22 @@ export class RealtimeConversation {
     if (this.audio) this.audio.muted = muted;
   }
 
+  pauseInput(): void {
+    this.setInputEnabled(false);
+  }
+
+  resumeInput(): void {
+    if (this.inputResumeTimer) {
+      window.clearTimeout(this.inputResumeTimer);
+      this.inputResumeTimer = undefined;
+    }
+    if (!this.closed) this.setInputEnabled(true);
+  }
+
   disconnect(): void {
     this.closed = true;
+    if (this.inputResumeTimer) window.clearTimeout(this.inputResumeTimer);
+    this.inputResumeTimer = undefined;
     this.microphone?.getTracks().forEach((track) => track.stop());
     this.channel?.close();
     this.peer?.close();
@@ -191,6 +209,7 @@ export class RealtimeConversation {
       return;
     }
     if (type === "input_audio_buffer.speech_stopped" || type === "response.created") {
+      this.pauseInput();
       this.callbacks.onPhase("thinking");
       return;
     }
@@ -209,8 +228,19 @@ export class RealtimeConversation {
     }
 
     if (type === "response.output_audio_transcript.delta") {
+      this.pauseInput();
       this.transcriptBuffer += event.delta ?? "";
       if (this.transcriptBuffer) this.callbacks.onPhase("speaking");
+      return;
+    }
+    if (type === "output_audio_buffer.started") {
+      this.pauseInput();
+      this.callbacks.onPhase("speaking");
+      return;
+    }
+    if (type === "output_audio_buffer.stopped" && !this.externalSpeech) {
+      this.resumeInput();
+      this.callbacks.onPhase("connected");
       return;
     }
     if (type === "response.output_audio_transcript.done") {
@@ -219,6 +249,7 @@ export class RealtimeConversation {
       return;
     }
     if (type === "response.output_text.delta") {
+      this.pauseInput();
       this.transcriptBuffer += event.delta ?? "";
       return;
     }
@@ -232,14 +263,20 @@ export class RealtimeConversation {
       this.emitAssistantTranscript(text);
       this.transcriptBuffer = "";
       if (!this.externalSpeech) {
-        window.setTimeout(() => {
-          if (!this.closed) this.callbacks.onPhase("connected");
-        }, 700);
+        this.inputResumeTimer = window.setTimeout(() => {
+          this.inputResumeTimer = undefined;
+          if (!this.closed) {
+            this.resumeInput();
+            this.callbacks.onPhase("connected");
+          }
+        }, 1_500);
       }
       return;
     }
     if (type === "error") {
+      this.resumeInput();
       this.callbacks.onError(event.error?.message ?? "实时 AI 会话发生错误。");
+      this.callbacks.onPhase("connected");
     }
   }
 
@@ -247,7 +284,7 @@ export class RealtimeConversation {
     const clean = text.trim();
     if (!clean || clean === this.lastUserTranscript) return;
     this.lastUserTranscript = clean;
-    this.callbacks.onUserTranscript(clean);
+    this.callbacks.onUserTranscript?.(clean);
   }
 
   private emitAssistantTranscript(text: string): void {
@@ -255,5 +292,11 @@ export class RealtimeConversation {
     if (!clean || clean === this.lastAssistantTranscript) return;
     this.lastAssistantTranscript = clean;
     this.callbacks.onAssistantTranscript(clean);
+  }
+
+  private setInputEnabled(enabled: boolean): void {
+    this.microphone?.getAudioTracks().forEach((track) => {
+      track.enabled = enabled;
+    });
   }
 }

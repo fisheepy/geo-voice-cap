@@ -7,17 +7,21 @@
     "dev": "node server.mjs",
     "dev:vite": "vite",
     "build": "tsc -b && vite build",
+    "build:android": "tsc -b && vite build --mode android",
+    "android:sync": "npm run build:android && cap sync android",
     "lint": "eslint .",
     "test:persona": "node tests/persona.mjs",
     "test:reactions": "node tests/reactions.mjs",
+    "test:turns": "node tests/turn-taking.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:realtime": "node tests/realtime.mjs",
     "voice:create:cartesia": "node tools/create-cartesia-voice.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/core": "^7.4.3",
-    "@capacitor/ios": "^7.4.3",
+    "@capacitor/android": "7.6.8",
+    "@capacitor/core": "7.6.8",
+    "@capacitor/ios": "7.6.8",
     "@pixiv/three-vrm": "^3.4.2",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.3.0",
@@ -28,7 +32,7 @@
     "three": "^0.179.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "^7.4.3",
+    "@capacitor/cli": "7.6.8",
     "@eslint/js": "^9.33.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",

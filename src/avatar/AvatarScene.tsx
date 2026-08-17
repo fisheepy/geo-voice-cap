@@ -6,6 +6,7 @@ import type { AvatarCommand } from "./types";
 
 export function AvatarScene({ command, modelUrl, onReady }: { command: AvatarCommand; modelUrl?: string; onReady?: () => void }) {
   const compact = typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches;
+  const cameraTargetY = compact ? 0.25 : 0.65;
   return (
     <Canvas
       shadows
@@ -25,7 +26,7 @@ export function AvatarScene({ command, modelUrl, onReady }: { command: AvatarCom
         <Environment preset="apartment" environmentIntensity={0.55} />
       </Suspense>
       <OrbitControls
-        target={[0, 0.65, 0]}
+        target={[0, cameraTargetY, 0]}
         enablePan={false}
         enableDamping
         dampingFactor={0.06}

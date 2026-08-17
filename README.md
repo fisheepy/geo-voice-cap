@@ -7,8 +7,9 @@ A mobile-first, expressive 3D avatar MVP built with React, Capacitor, Three.js, 
 - Polished responsive avatar stage for desktop and mobile
 - Two selectable bundled VRM characters, Mira and Kai, with idle motion, blinking, mouth movement, expressive gestures, and a procedural error fallback
 - Three persistent Kai outfit variants: clean everyday, city commute, and weekend crossbody styling
-- Five persistent AI-generated environments: office, gym, beach, nature, and cafe
-- Voice-only first-version interface with a readable transcript drawer and no text composer
+- Five persistent AI-generated environments with dedicated landscape and portrait compositions: office, gym, beach, nature, and cafe
+- Voice-only first-version interface with no transcript, text composer, or microphone button
+- Automatic voice connection with strict turn-taking that pauses input until the companion finishes speaking
 - Semantic behavior states including listening, thinking, explaining, comforting, greeting, agreement, and celebration
 - Content-aware reactions that coordinate facial emotion, body action, and mouth movement without an extra model call
 - Low-latency speech-to-speech conversation through the Realtime API and WebRTC
@@ -60,6 +61,7 @@ npm run build
 npm run lint
 npm run test:persona
 npm run test:reactions
+npm run test:turns
 npm run test:smoke
 npm run test:realtime
 ```
@@ -74,6 +76,27 @@ npx cap sync ios
 ```
 
 Open `ios/App/App.xcworkspace` on macOS with Xcode to run on an iPhone. CocoaPods and the final native build require macOS.
+
+## Android
+
+For a local debug build, create an ignored `.env.android.local` file that points to the development computer's LAN address:
+
+```text
+VITE_API_BASE_URL=http://192.168.x.x:5173
+```
+
+Keep the computer and phone on the same network, leave `npm run dev` running, then build with the Android Studio JDK and SDK:
+
+```powershell
+npm run android:sync
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+Set-Location android
+.\gradlew.bat assembleDebug
+```
+
+The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. It permits cleartext HTTP only in debug builds so the local server can be reached. Production builds should set `VITE_API_BASE_URL` to an HTTPS backend; the OpenAI and custom-voice keys remain on that server.
 
 ## Avatar workflow
 

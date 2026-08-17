@@ -3,10 +3,8 @@ import type { CSSProperties } from "react";
 import {
   AlertCircle,
   CheckCircle2,
-  History,
   MapPin,
-  Mic,
-  MicOff,
+  RefreshCw,
   RotateCcw,
   Sparkles,
   Upload,
@@ -16,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { AvatarScene } from "./avatar/AvatarScene";
+import { apiUrl } from "./api";
 import { formatAvatarSize, loadAvatar, removeAvatar, saveAvatar, validateVrmFile } from "./avatar/avatarStorage";
 import type { StoredAvatar } from "./avatar/avatarStorage";
 import { deriveAvatarReaction } from "./avatar/reactions";
@@ -24,8 +23,6 @@ import { RealtimeConversation } from "./realtime/RealtimeConversation";
 import type { RealtimePhase } from "./realtime/RealtimeConversation";
 import "./App.css";
 
-type Speaker = "mira" | "user";
-type Message = { id: number; speaker: Speaker; text: string };
 type BundledAvatarId = "mira" | "kai";
 type KaiOutfitId = "everyday" | "smart" | "weekend";
 type VoiceMode = "openai-built-in" | "openai-custom" | "cartesia";
@@ -54,6 +51,7 @@ type SceneOption = {
   name: string;
   description: string;
   image: string;
+  portraitImage: string;
   position: string;
 };
 
@@ -111,11 +109,11 @@ const KAI_OUTFITS: Record<KaiOutfitId, KaiOutfit> = {
   },
 };
 const SCENES: Record<SceneId, SceneOption> = {
-  office: { id: "office", name: "公司", description: "清爽工作室", image: "/scenes/office.jpg", position: "center center" },
-  gym: { id: "gym", name: "健身房", description: "明亮训练空间", image: "/scenes/gym.jpg", position: "center center" },
-  beach: { id: "beach", name: "沙滩", description: "安静海湾", image: "/scenes/beach.jpg", position: "center center" },
-  nature: { id: "nature", name: "自然风光", description: "湖畔林间", image: "/scenes/nature.jpg", position: "center center" },
-  cafe: { id: "cafe", name: "咖啡馆", description: "午后咖啡馆", image: "/scenes/cafe.jpg", position: "center center" },
+  office: { id: "office", name: "公司", description: "清爽工作室", image: "/scenes/office.jpg", portraitImage: "/scenes/office-portrait.jpg", position: "center center" },
+  gym: { id: "gym", name: "健身房", description: "明亮训练空间", image: "/scenes/gym.jpg", portraitImage: "/scenes/gym-portrait.jpg", position: "center center" },
+  beach: { id: "beach", name: "沙滩", description: "安静海湾", image: "/scenes/beach.jpg", portraitImage: "/scenes/beach-portrait.jpg", position: "center center" },
+  nature: { id: "nature", name: "自然风光", description: "湖畔林间", image: "/scenes/nature.jpg", portraitImage: "/scenes/nature-portrait.jpg", position: "center center" },
+  cafe: { id: "cafe", name: "咖啡馆", description: "午后咖啡馆", image: "/scenes/cafe.jpg", portraitImage: "/scenes/cafe-portrait.jpg", position: "center center" },
 };
 
 function readBundledAvatarId(): BundledAvatarId {
@@ -132,12 +130,8 @@ function readSceneId(): SceneId {
   return stored === "office" || stored === "gym" || stored === "beach" || stored === "nature" ? stored : "cafe";
 }
 
-function createInitialMessages(name: string): Message[] {
-  return [{ id: 1, speaker: "mira", text: `你好，我是${name}。今天想和我聊些什么？` }];
-}
-
 async function loadVoiceModes(): Promise<VoiceModes> {
-  const response = await fetch("/api/health");
+  const response = await fetch(apiUrl("/api/health"));
   if (!response.ok) return DEFAULT_VOICE_MODES;
   const body = await response.json();
   const mode = (value: unknown): VoiceMode => value === "openai-custom" || value === "cartesia" ? value : "openai-built-in";
@@ -160,11 +154,8 @@ export default function App() {
   const [sceneId, setSceneId] = useState<SceneId>(readSceneId);
   const selectedScene = SCENES[sceneId];
   const [command, setCommand] = useState<AvatarCommand>({ action: "wave", emotion: "happy", speaking: false, nonce: 1 });
-  const [messages, setMessages] = useState<Message[]>(() => createInitialMessages(BUNDLED_AVATARS[readBundledAvatarId()].name));
-  const [isThinking, setIsThinking] = useState(false);
   const [realtimePhase, setRealtimePhase] = useState<RealtimePhase>("disconnected");
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [conversationOpen, setConversationOpen] = useState(false);
   const [avatarPanelOpen, setAvatarPanelOpen] = useState(false);
   const [scenePanelOpen, setScenePanelOpen] = useState(false);
   const [avatarRecord, setAvatarRecord] = useState<StoredAvatar | null>(null);
@@ -180,25 +171,26 @@ export default function App() {
   const customAudioUrlRef = useRef<string | null>(null);
   const speechRequestRef = useRef(0);
   const timersRef = useRef<number[]>([]);
-  const messageIdRef = useRef(2);
   const avatarUrlRef = useRef<string | undefined>(undefined);
+  const startVoiceRef = useRef<() => Promise<void>>(async () => undefined);
 
   const personaName = avatarRecord?.name ?? bundledAvatar.name;
   const isVoiceActive = realtimePhase !== "disconnected";
   const externalVoiceEnabled = voiceModes[bundledAvatarId] === "cartesia";
   const voiceStatusLabel: Record<RealtimePhase, string> = {
-    disconnected: "点击开始对话",
+    disconnected: "正在准备语音",
     connecting: "正在连接...",
     connected: "可以直接说话",
     listening: "正在听...",
     thinking: "正在思考...",
     speaking: "正在回应...",
   };
-  const latestAssistantMessage = [...messages].reverse().find((message) => message.speaker === "mira")?.text ?? "";
+  const voiceStatus = realtimePhase === "disconnected" && speechNotice ? "语音未连接" : voiceStatusLabel[realtimePhase];
   const handleAvatarReady = useCallback(() => setAvatarReady(true), []);
 
   const stageStyle = {
     "--scene-image": `url(${selectedScene.image})`,
+    "--scene-image-portrait": `url(${selectedScene.portraitImage})`,
     "--scene-position": selectedScene.position,
   } as CSSProperties;
 
@@ -207,12 +199,12 @@ export default function App() {
     loadAvatar()
       .then((stored) => {
         if (!active || !stored) return;
+        realtimeRef.current?.disconnect();
+        realtimeRef.current = null;
         const url = URL.createObjectURL(stored.blob);
         avatarUrlRef.current = url;
         setAvatarUrl(url);
         setAvatarRecord(stored);
-        setMessages(createInitialMessages(stored.name));
-        messageIdRef.current = 2;
       })
       .catch(() => {
         if (!active) return;
@@ -225,8 +217,10 @@ export default function App() {
       })
       .catch(() => undefined);
     for (const scene of Object.values(SCENES)) {
-      const image = new Image();
-      image.src = scene.image;
+      for (const source of [scene.image, scene.portraitImage]) {
+        const image = new Image();
+        image.src = source;
+      }
     }
     const timers = timersRef.current;
     return () => {
@@ -249,8 +243,6 @@ export default function App() {
     setAvatarReady(false);
     setAvatarUrl(url);
     setAvatarRecord(stored);
-    setMessages(createInitialMessages(stored.name));
-    messageIdRef.current = 2;
   };
 
   const handleAvatarFile = async (file?: File) => {
@@ -290,8 +282,6 @@ export default function App() {
     setAvatarRecord(null);
     setBundledAvatarId(id);
     localStorage.setItem(BUNDLED_AVATAR_STORAGE_KEY, id);
-    setMessages(createInitialMessages(selected.name));
-    messageIdRef.current = 2;
     setAvatarNoticeKind("success");
     setAvatarNotice(`${selected.name}已准备好。`);
     animate("wave", "happy");
@@ -346,7 +336,10 @@ export default function App() {
         customAudioUrlRef.current = null;
       }
       animate("idle", emotion, false);
-      if (realtimeRef.current) setRealtimePhase("connected");
+      if (realtimeRef.current) {
+        realtimeRef.current.resumeInput();
+        setRealtimePhase("connected");
+      }
     };
     const speakWithBrowser = () => {
       if (browserSpeechStarted) return;
@@ -367,6 +360,7 @@ export default function App() {
       const chineseVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("zh"));
       utterance.voice = chineseVoices.find((voice) => preferredVoice.test(voice.name)) ?? chineseVoices[0] ?? voices[0] ?? null;
       utterance.onstart = () => {
+        realtimeRef.current?.pauseInput();
         setSpeaking(true, emotion);
         if (realtimeRef.current) setRealtimePhase("speaking");
       };
@@ -389,7 +383,7 @@ export default function App() {
 
     void (async () => {
       try {
-        const response = await fetch("/api/voice/speech", {
+        const response = await fetch(apiUrl("/api/voice/speech"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ persona: bundledAvatarId, text, emotion }),
@@ -404,6 +398,7 @@ export default function App() {
         customAudioRef.current = audio;
         customAudioUrlRef.current = audioUrl;
         audio.onplay = () => {
+          realtimeRef.current?.pauseInput();
           setSpeaking(true, emotion);
           if (realtimeRef.current) setRealtimePhase("speaking");
         };
@@ -418,29 +413,9 @@ export default function App() {
     })();
   };
 
-  const stopListening = () => {
-    speechRequestRef.current += 1;
-    window.speechSynthesis?.cancel();
-    customAudioRef.current?.pause();
-    customAudioRef.current = null;
-    if (customAudioUrlRef.current) {
-      URL.revokeObjectURL(customAudioUrlRef.current);
-      customAudioUrlRef.current = null;
-    }
-    realtimeRef.current?.disconnect();
-    realtimeRef.current = null;
-    setRealtimePhase("disconnected");
-    setIsThinking(false);
-    animate("idle", "neutral");
-  };
-
-  const startListening = async () => {
-    if (isVoiceActive) {
-      stopListening();
-      return;
-    }
+  const startVoice = async () => {
+    if (realtimeRef.current) return;
     setSpeechNotice("");
-    setConversationOpen(false);
     setAvatarPanelOpen(false);
     setScenePanelOpen(false);
     window.speechSynthesis?.cancel();
@@ -463,13 +438,10 @@ export default function App() {
       onPhase: (phase) => {
         setRealtimePhase(phase);
         if (phase === "listening") {
-          setIsThinking(false);
           animate("listening", "neutral");
         } else if (phase === "thinking") {
-          setIsThinking(true);
           animate("thinking", "thoughtful");
         } else if (phase === "speaking") {
-          setIsThinking(false);
           setCommand((current) => ({
             action: current.action === "thinking" || current.action === "listening" || current.action === "idle" ? "talk" : current.action,
             emotion: current.emotion === "neutral" ? "happy" : current.emotion,
@@ -477,23 +449,16 @@ export default function App() {
             nonce: current.nonce + 1,
           }));
         } else if (phase === "connected" || phase === "disconnected") {
-          setIsThinking(false);
           animate("idle", "neutral", false);
         }
       },
-      onUserTranscript: (text) => {
-        setMessages((current) => [...current, { id: messageIdRef.current++, speaker: "user", text }]);
-      },
       onAssistantTranscript: (text) => {
         const reaction = deriveAvatarReaction(text);
-        setMessages((current) => [...current, { id: messageIdRef.current++, speaker: "mira", text }]);
-        setIsThinking(false);
         if (useExternalVoice) speak(text, reaction.emotion, reaction.action, true);
         else animate(reaction.action, reaction.emotion, true);
       },
       onError: (message) => {
         setSpeechNotice(message);
-        setIsThinking(false);
         animate("idle", "neutral", false);
       },
     });
@@ -503,7 +468,6 @@ export default function App() {
     } catch (error) {
       if (realtimeRef.current === realtime) realtimeRef.current = null;
       setRealtimePhase("disconnected");
-      setIsThinking(false);
       animate("idle", "neutral", false);
       const errorName = error instanceof DOMException ? error.name : "";
       const notice = errorName === "NotAllowedError" || errorName === "SecurityError"
@@ -517,6 +481,27 @@ export default function App() {
     }
   };
 
+  startVoiceRef.current = startVoice;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void startVoiceRef.current(), 350);
+    return () => window.clearTimeout(timer);
+  }, [personaName]);
+
+  useEffect(() => {
+    const reconnectWhenActive = () => {
+      if (document.visibilityState === "visible" && !realtimeRef.current) {
+        void startVoiceRef.current();
+      }
+    };
+    document.addEventListener("visibilitychange", reconnectWhenActive);
+    window.addEventListener("online", reconnectWhenActive);
+    return () => {
+      document.removeEventListener("visibilitychange", reconnectWhenActive);
+      window.removeEventListener("online", reconnectWhenActive);
+    };
+  }, []);
+
   const toggleSound = () => {
     setSoundEnabled((enabled) => {
       const next = !enabled;
@@ -528,6 +513,10 @@ export default function App() {
         if (customAudioUrlRef.current) {
           URL.revokeObjectURL(customAudioUrlRef.current);
           customAudioUrlRef.current = null;
+        }
+        if (externalVoiceEnabled && realtimeRef.current) {
+          realtimeRef.current.resumeInput();
+          setRealtimePhase("connected");
         }
         animate("idle", "neutral", false);
       }
@@ -545,20 +534,20 @@ export default function App() {
         data-scene={sceneId}
         data-avatar-action={command.action}
         data-avatar-emotion={command.emotion}
+        data-voice-phase={realtimePhase}
       >
         <header className="topbar">
           <div className="brand-lockup">
             <span className="brand-mark"><Sparkles size={16} strokeWidth={2.2} /></span>
             <div>
               <h1>{personaName}</h1>
-              <span className={`presence ${isVoiceActive ? "live" : ""}`}><i /> {isVoiceActive ? "语音已连接" : "在线"}</span>
+              <span className={`presence ${isVoiceActive ? "live" : ""}`}><i /> {voiceStatus}</span>
             </div>
           </div>
           <div className="topbar-actions">
             <button
               className="icon-button"
               onClick={() => {
-                setConversationOpen(false);
                 setAvatarPanelOpen(false);
                 setScenePanelOpen((open) => !open);
               }}
@@ -570,7 +559,6 @@ export default function App() {
             <button
               className="icon-button"
               onClick={() => {
-                setConversationOpen(false);
                 setScenePanelOpen(false);
                 setAvatarPanelOpen((open) => !open);
               }}
@@ -582,13 +570,6 @@ export default function App() {
             <button className="icon-button" onClick={toggleSound} aria-label={soundEnabled ? "静音" : "开启声音"} title={soundEnabled ? "静音" : "开启声音"}>
               {soundEnabled ? <Volume2 size={19} /> : <VolumeX size={19} />}
             </button>
-            <button className="icon-button conversation-toggle" onClick={() => {
-              setAvatarPanelOpen(false);
-              setScenePanelOpen(false);
-              setConversationOpen((open) => !open);
-            }} aria-label="打开语音记录" title="语音记录">
-              {conversationOpen ? <X size={20} /> : <History size={19} />}
-            </button>
           </div>
         </header>
 
@@ -598,41 +579,21 @@ export default function App() {
           <AvatarScene command={command} modelUrl={avatarUrl ?? bundledAvatar.url} onReady={handleAvatarReady} />
           {!avatarReady && <div className="avatar-loading" role="status"><span />正在准备{personaName}</div>}
           <div className="scene-glow" />
-          <div className={`live-caption ${isThinking ? "thinking" : ""}`} aria-live="polite">
-            <span className="caption-label">{isThinking ? `${personaName}正在思考` : personaName}</span>
-            <p>{isThinking ? <><i /><i /><i /></> : latestAssistantMessage}</p>
-          </div>
         </div>
 
-        <div className="bottom-controls">
-          <button className={`mic-button ${isVoiceActive ? "listening" : ""}`} onClick={startListening} aria-label={isVoiceActive ? "结束语音对话" : `和${personaName}说话`}>
-            <span className="mic-ripple" />
-            {isVoiceActive ? <MicOff size={25} /> : <Mic size={25} />}
-          </button>
-          <span className="mic-label">{voiceStatusLabel[realtimePhase]}</span>
-          {speechNotice && <p className="speech-notice" role="alert"><AlertCircle size={14} />{speechNotice}</p>}
+        <div className={`voice-indicator ${realtimePhase}`} role="status" aria-label={voiceStatus}>
+          <i /><i /><i /><i />
         </div>
+        {speechNotice && (
+          <div className="speech-notice" role="alert">
+            <AlertCircle size={15} />
+            <span>{speechNotice}</span>
+            <button type="button" onClick={() => void startVoice()} aria-label="重新连接语音" title="重新连接语音">
+              <RefreshCw size={16} />
+            </button>
+          </div>
+        )}
       </section>
-
-      <aside className={`conversation-panel ${conversationOpen ? "open" : ""}`} aria-label="语音记录">
-        <div className="panel-header">
-          <div>
-            <span className="panel-kicker">语音记录</span>
-            <h2>{personaName}和你</h2>
-          </div>
-          <button className="icon-button panel-close" onClick={() => setConversationOpen(false)} aria-label="关闭语音记录"><X size={19} /></button>
-        </div>
-
-        <div className="messages" aria-live="polite">
-          {messages.map((message) => (
-            <div key={message.id} className={`message ${message.speaker}`}>
-              <span>{message.speaker === "mira" ? personaName : "你"}</span>
-              <p>{message.text}</p>
-            </div>
-          ))}
-          {isThinking && <div className="message mira pending"><span>{personaName}</span><p><i /><i /><i /></p></div>}
-        </div>
-      </aside>
 
       <aside className={`scene-panel ${scenePanelOpen ? "open" : ""}`} aria-label="场景选择">
         <div className="panel-header">
@@ -655,7 +616,7 @@ export default function App() {
                   aria-pressed={active}
                   onClick={() => selectScene(scene.id)}
                 >
-                  <img src={scene.image} alt="" />
+                  <img src={scene.portraitImage} alt="" />
                   <span><strong>{scene.name}</strong><small>{scene.description}</small></span>
                   {active && <CheckCircle2 size={18} aria-hidden="true" />}
                 </button>

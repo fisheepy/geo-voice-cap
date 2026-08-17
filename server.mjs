@@ -22,6 +22,32 @@ const realtimeModel = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-min
 const textModel = process.env.OPENAI_TEXT_MODEL ?? "gpt-5-mini";
 const cartesiaModel = process.env.CARTESIA_TTS_MODEL ?? "sonic-3.5";
 const cartesiaApiVersion = "2026-03-01";
+const allowedOrigins = new Set([
+  "http://localhost",
+  "https://localhost",
+  "capacitor://localhost",
+  ...String(process.env.ALLOWED_APP_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+]);
+
+app.use((request, response, next) => {
+  const origin = request.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    response.set({
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      Vary: "Origin",
+    });
+  }
+  if (request.method === "OPTIONS") {
+    response.sendStatus(origin && allowedOrigins.has(origin) ? 204 : 403);
+    return;
+  }
+  next();
+});
 
 function personaVoice(persona) {
   const customVoiceId = persona === "Kai" ? process.env.OPENAI_KAI_VOICE_ID : process.env.OPENAI_MIRA_VOICE_ID;
@@ -209,7 +235,7 @@ app.post(
           turn_detection: {
             type: "semantic_vad",
             create_response: true,
-            interrupt_response: true,
+            interrupt_response: false,
           },
         },
         ...(voiceMode === "cartesia" ? {} : { output: { voice } }),

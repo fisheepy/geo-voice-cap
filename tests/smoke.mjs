@@ -5,11 +5,11 @@ const baseURL = process.env.MVP_URL ?? "http://127.0.0.1:5173";
 const executablePath = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const failures = [];
 const scenes = [
-  { id: "office", label: "公司 清爽工作室", file: "office.jpg" },
-  { id: "gym", label: "健身房 明亮训练空间", file: "gym.jpg" },
-  { id: "beach", label: "沙滩 安静海湾", file: "beach.jpg" },
-  { id: "nature", label: "自然风光 湖畔林间", file: "nature.jpg" },
-  { id: "cafe", label: "咖啡馆 午后咖啡馆", file: "cafe.jpg" },
+  { id: "office", label: "公司 清爽工作室", landscape: "office.jpg", portrait: "office-portrait.jpg" },
+  { id: "gym", label: "健身房 明亮训练空间", landscape: "gym.jpg", portrait: "gym-portrait.jpg" },
+  { id: "beach", label: "沙滩 安静海湾", landscape: "beach.jpg", portrait: "beach-portrait.jpg" },
+  { id: "nature", label: "自然风光 湖畔林间", landscape: "nature.jpg", portrait: "nature-portrait.jpg" },
+  { id: "cafe", label: "咖啡馆 午后咖啡馆", landscape: "cafe.jpg", portrait: "cafe-portrait.jpg" },
 ];
 
 function check(condition, message) {
@@ -43,7 +43,8 @@ for (const profile of [
   check(await page.getByRole("heading", { name: "凯", exact: true }).isVisible(), `${profile.name}: companion heading is not visible`);
   check(await page.locator(".avatar-stage").getAttribute("data-scene") === "cafe", `${profile.name}: cafe is not the default scene`);
   check(await page.getByRole("textbox").count() === 0, `${profile.name}: a text composer is still present`);
-  for (const removedLabel of ["挥手", "点头", "庆祝", "发送消息"]) {
+  check(await page.locator(".live-caption, .conversation-panel, .mic-button").count() === 0, `${profile.name}: removed transcript or microphone UI is still rendered`);
+  for (const removedLabel of ["挥手", "点头", "庆祝", "发送消息", "打开语音记录", "和凯说话", "结束语音对话"]) {
     check(await page.getByRole("button", { name: removedLabel, exact: true }).count() === 0, `${profile.name}: removed control ${removedLabel} is still present`);
   }
 
@@ -57,19 +58,15 @@ for (const profile of [
     await page.getByRole("button", { name: /^选择场景/ }).click();
     await page.getByRole("heading", { name: "选择相处的地方" }).waitFor({ state: "visible" });
     const option = page.getByRole("button", { name: scene.label, exact: true });
-    const imageReady = await option.locator("img").evaluate((image) => image.complete && image.naturalWidth >= 1000 && image.naturalHeight >= 600);
-    check(imageReady, `${profile.name}: ${scene.id} scene image did not load at full resolution`);
+    const imageReady = await option.locator("img").evaluate((image) => image.complete && image.naturalWidth >= 900 && image.naturalHeight >= 1600);
+    check(imageReady, `${profile.name}: ${scene.id} portrait scene image did not load at full resolution`);
     await option.click();
     await page.locator(`.avatar-stage[data-scene="${scene.id}"]`).waitFor({ state: "visible" });
     const backgroundImage = await page.locator(".scene-background").evaluate((element) => getComputedStyle(element).backgroundImage);
-    check(backgroundImage.includes(scene.file), `${profile.name}: ${scene.id} scene was not applied`);
+    const expectedFile = profile.name === "mobile" ? scene.portrait : scene.landscape;
+    check(backgroundImage.includes(expectedFile), `${profile.name}: ${scene.id} did not use ${expectedFile}`);
     check(await page.evaluate(() => localStorage.getItem("mira-background-scene")) === scene.id, `${profile.name}: ${scene.id} was not persisted`);
   }
-
-  await page.getByRole("button", { name: "打开语音记录" }).click();
-  await page.getByRole("heading", { name: "凯和你" }).waitFor({ state: "visible" });
-  check(await page.getByRole("textbox").count() === 0, `${profile.name}: transcript drawer contains a textbox`);
-  await page.getByRole("button", { name: "关闭语音记录" }).click();
 
   await page.getByRole("button", { name: "选择角色" }).click();
   await page.getByRole("heading", { name: "选择陪伴角色" }).waitFor({ state: "visible" });
@@ -93,9 +90,9 @@ const blockedMicContext = await browser.newContext({ viewport: { width: 390, hei
 const blockedMicPage = await blockedMicContext.newPage();
 await blockedMicPage.goto(baseURL, { waitUntil: "networkidle" });
 await blockedMicPage.locator(".avatar-loading").waitFor({ state: "hidden", timeout: 30_000 });
-await blockedMicPage.getByRole("button", { name: "和凯说话" }).click();
 await blockedMicPage.locator(".speech-notice").waitFor({ state: "visible", timeout: 5000 });
 check((await blockedMicPage.locator(".speech-notice").textContent())?.includes("麦克风"), "microphone: actionable permission error was not shown on the main stage");
+check(await blockedMicPage.getByRole("button", { name: "重新连接语音" }).isVisible(), "microphone: retry control is missing after automatic connection fails");
 await blockedMicContext.close();
 
 await browser.close();
@@ -105,4 +102,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("Smoke test passed: voice-only UI, five persistent scenes, nonblank avatar, outfit switching, responsive layout, and microphone errors.");
+console.log("Smoke test passed: automatic voice UI, portrait scenes, nonblank avatar, outfit switching, responsive layout, and microphone recovery.");

@@ -29,20 +29,19 @@ page.on("console", (message) => {
 try {
   await page.goto(baseURL, { waitUntil: "networkidle" });
   await page.locator(".avatar-loading").waitFor({ state: "hidden", timeout: 30_000 });
-  await page.getByRole("button", { name: "和凯说话" }).click();
-  await page.getByRole("button", { name: "结束语音对话" }).waitFor({ state: "visible", timeout: 30_000 });
-  await page.getByText("可以直接说话").waitFor({ state: "visible", timeout: 30_000 });
+  await page.locator('.avatar-stage[data-voice-phase="connected"]').waitFor({ state: "visible", timeout: 30_000 });
   if (await page.getByRole("textbox").count()) throw new Error("Voice-only build still exposes a text composer.");
   if (await page.getByRole("button", { name: "发送消息" }).count()) throw new Error("Voice-only build still exposes a send button.");
+  if (await page.locator(".live-caption, .conversation-panel, .mic-button").count()) {
+    throw new Error("Voice-only build still exposes transcript or microphone controls.");
+  }
   if ((await page.locator(".avatar-stage").getAttribute("data-avatar-action")) !== "idle") {
     throw new Error("Avatar did not settle into the connected idle state.");
   }
   if (runtimeErrors.length) throw new Error(`Browser runtime errors: ${runtimeErrors.join(" | ")}`);
 
   await page.screenshot({ path: "test-artifacts/realtime-conversation.png", fullPage: true });
-  await page.getByRole("button", { name: "结束语音对话" }).click();
-  await page.getByRole("button", { name: "和凯说话" }).waitFor({ state: "visible" });
-  console.log(`Realtime connection test passed for the voice-only UI using ${health.model}.`);
+  console.log(`Realtime automatic connection test passed for the voice-only UI using ${health.model}.`);
 } finally {
   await browser.close();
 }
