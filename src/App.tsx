@@ -1,520 +1,733 @@
-import type { LatLngTuple } from "leaflet";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Capacitor } from "@capacitor/core";
-import { Geolocation } from "@capacitor/geolocation";
-import { Filesystem, Directory, Encoding } from "@capacitor/filesystem";
-import { VoiceRecorder } from "capacitor-voice-recorder";
-import { v4 as uuidv4 } from "uuid";
-import MarkerClusterGroup from "react-leaflet-cluster";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  MapPin,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Upload,
+  UserRoundCog,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+import { AvatarScene } from "./avatar/AvatarScene";
+import { apiUrl } from "./api";
+import { formatAvatarSize, loadAvatar, removeAvatar, saveAvatar, validateVrmFile } from "./avatar/avatarStorage";
+import type { StoredAvatar } from "./avatar/avatarStorage";
+import { deriveAvatarReaction } from "./avatar/reactions";
+import type { AvatarAction, AvatarCommand, AvatarEmotion } from "./avatar/types";
+import { RealtimeConversation } from "./realtime/RealtimeConversation";
+import type { RealtimePhase } from "./realtime/RealtimeConversation";
+import "./App.css";
 
-// Leaflet map
-import "leaflet/dist/leaflet.css";
-import type { Map as LeafletMap } from "leaflet";
-
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
-import * as L from "leaflet";
-// @ts-ignore
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-// @ts-ignore
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-// @ts-ignore
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
-L.Icon.Default.mergeOptions({ iconRetinaUrl: markerIcon2x, iconUrl: markerIcon, shadowUrl: markerShadow });
-
-const IS_WEB = Capacitor.getPlatform() === "web";
-
-/* ────────────────────────────────────────────────────────────────────────────
-   Types & Storage
-──────────────────────────────────────────────────────────────────────────── */
-type Note = {
-  id: string;
-  filePath: string;  // path in Filesystem
-  webPath: string;   // src for <audio> (blob:/file:/content:/)
-  createdAt: string;
-  lat: number;
-  lon: number;
-  label?: string;
-  durationMs?: number;
-  mimeType?: string;
+type BundledAvatarId = "mira" | "kai";
+type KaiOutfitId = "everyday" | "smart" | "weekend";
+type VoiceMode = "openai-built-in" | "openai-custom" | "cartesia";
+type VoiceModes = Record<BundledAvatarId, VoiceMode>;
+type SceneId = "office" | "gym" | "beach" | "nature" | "cafe";
+type BundledAvatar = {
+  id: BundledAvatarId;
+  name: string;
+  url: string;
+  preview: string;
+  size: number;
+  specification: "VRM 0.x" | "VRM 1.0";
+  description: string;
+};
+type KaiOutfit = {
+  id: KaiOutfitId;
+  name: string;
+  description: string;
+  url: string;
+  preview: string;
+  size: number;
+  colors: string[];
+};
+type SceneOption = {
+  id: SceneId;
+  name: string;
+  description: string;
+  image: string;
+  portraitImage: string;
+  position: string;
 };
 
-const NOTES_INDEX = "notesIndex.json";
-
-async function readNotes(): Promise<Note[]> {
-  try {
-    const res = await Filesystem.readFile({ path: NOTES_INDEX, directory: Directory.Data, encoding: Encoding.UTF8 });
-    const raw = res.data as unknown; // string | Blob (web)
-    const text = typeof raw === "string" ? raw : await (raw as Blob).text();
-    return JSON.parse(text) as Note[];
-  } catch {
-    return [];
-  }
-}
-async function writeNotes(notes: Note[]) {
-  await Filesystem.writeFile({
-    path: NOTES_INDEX,
-    data: JSON.stringify(notes),
-    directory: Directory.Data,
-    encoding: Encoding.UTF8,
-    recursive: true,
-  });
-}
-
-/* ────────────────────────────────────────────────────────────────────────────
-   Utils
-──────────────────────────────────────────────────────────────────────────── */
-function msToClock(ms: number) {
-  const s = Math.floor(ms / 1000), m = Math.floor(s / 60), ss = (s % 60).toString().padStart(2, "0");
-  return `${m}:${ss}`;
-}
-function toBase64Standard(input: string): string {
-  let b64 = input.replace(/^data:.*;base64,/, "").trim().replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
-  const pad = b64.length % 4;
-  if (pad === 1) throw new Error("Invalid base64 length");
-  if (pad > 0) b64 += "=".repeat(4 - pad);
-  return b64;
-}
-function base64ToBlob(b64: string, mime = "application/octet-stream"): Blob {
-  const clean = b64.replace(/^data:.*;base64,/, "");
-  const bin = atob(clean);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  let binary = ""; const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function mimeToExt(m: string): string {
-  if (!m) return "m4a";
-  if (m.includes("webm")) return "webm";
-  if (m.includes("wav")) return "wav";
-  if (m.includes("mp3")) return "mp3";
-  return "m4a";
-}
-
-/* ────────────────────────────────────────────────────────────────────────────
-   Record View
-──────────────────────────────────────────────────────────────────────────── */
-/* ─── Record view (drop-in replacement) ───────────────────────────────────── */
-type UIStatus = "IDLE" | "RECORDING" | "SAVED" | "FAILED_TO_RECORD";
-
-const RecordView: React.FC<{ onSaved: (n: Note) => void }> = ({ onSaved }) => {
-  const [isRecording, setIsRecording] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const [status, setStatus] = useState<string | null>(null);
-  const [uiStatus, setUiStatus] = useState<UIStatus>("IDLE");
-  const timerRef = useRef<number | null>(null);
-
-  // Geo state
-  const positionRef = useRef<{ lat: number; lon: number } | null>(null);
-  const watchIdRef = useRef<string | null>(null);
-
-  // Web fallback recorder
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaChunksRef = useRef<Blob[]>([]);
-
-  // Warm up permissions
-  useEffect(() => {
-    (async () => {
-      try {
-        const perm = await Geolocation.checkPermissions();
-        if (perm.location !== "granted") await Geolocation.requestPermissions();
-      } catch { }
-    })();
-  }, []);
-
-  const startTimer = () => {
-    const t0 = Date.now();
-    timerRef.current = window.setInterval(() => setElapsed(Date.now() - t0), 200) as unknown as number;
-  };
-  const stopTimer = () => { if (timerRef.current) window.clearInterval(timerRef.current); timerRef.current = null; };
-
-  async function startGeoWatch() {
-    try {
-      // snapshot once
-      const first = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 });
-      positionRef.current = { lat: first.coords.latitude, lon: first.coords.longitude };
-    } catch { }
-    try {
-      // then watch for improvements during the recording
-      const id = await Geolocation.watchPosition({ enableHighAccuracy: true },
-        (pos, err) => {
-          if (err) return;
-          if (pos) positionRef.current = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-        }
-      );
-      watchIdRef.current = id as string | null;
-    } catch { }
-  }
-
-  function stopGeoWatch() {
-    if (watchIdRef.current) {
-      Geolocation.clearWatch({ id: watchIdRef.current }).catch(() => { });
-      watchIdRef.current = null;
-    }
-  }
-
-  const start = async () => {
-    try {
-      setStatus(null);
-
-      await startGeoWatch();
-
-      if (IS_WEB) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mr = new MediaRecorder(stream);
-        mediaChunksRef.current = [];
-        mr.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunksRef.current.push(e.data); };
-        mr.start();
-        mediaRecorderRef.current = mr;
-        mediaStreamRef.current = stream;
-        setIsRecording(true); setUiStatus("RECORDING"); setElapsed(0); startTimer();
-        return;
-      }
-
-      await VoiceRecorder.requestAudioRecordingPermission();
-      await VoiceRecorder.startRecording();
-      setIsRecording(true); setUiStatus("RECORDING"); setElapsed(0); startTimer();
-    } catch {
-      setUiStatus("FAILED_TO_RECORD"); setStatus("FAILED_TO_RECORD");
-      stopGeoWatch();
-    }
-  };
-
-  const stop = async () => {
-    try {
-      stopTimer();
-      stopGeoWatch();
-
-      if (IS_WEB) {
-        const mr = mediaRecorderRef.current;
-        if (!mr) throw new Error("No recorder");
-        const finished = new Promise<Blob>((resolve) => { mr.onstop = () => resolve(new Blob(mediaChunksRef.current, { type: "audio/webm" })); });
-        mr.stop();
-        const blob = await finished;
-        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-        mediaRecorderRef.current = null; mediaStreamRef.current = null;
-
-        const arrayBuffer = await blob.arrayBuffer();
-        const base64 = arrayBufferToBase64(arrayBuffer);
-        const id = uuidv4();
-        const filename = `audio/${id}.webm`;
-        await Filesystem.writeFile({ path: filename, directory: Directory.Data, data: base64, recursive: true });
-        const webPath = URL.createObjectURL(blob);
-
-        const coords = positionRef.current ?? { lat: 0, lon: 0 };
-        const note: Note = {
-          id, filePath: filename, webPath,
-          createdAt: new Date().toISOString(),
-          lat: coords.lat, lon: coords.lon,
-          label: new Date().toLocaleString(), durationMs: elapsed, mimeType: "audio/webm",
-        };
-        const existing = await readNotes(); await writeNotes([note, ...existing]); onSaved(note);
-        setIsRecording(false); setUiStatus("SAVED"); setStatus("Saved"); setTimeout(() => setStatus(null), 1200);
-        return;
-      }
-
-      const result = await VoiceRecorder.stopRecording();
-      setIsRecording(false);
-
-      const rawBase64 = result?.value?.recordDataBase64;
-      const ms = result?.value?.msDuration as number | undefined;
-      const mime = (result?.value?.mimeType as string | undefined) || "audio/m4a";
-      if (!rawBase64) throw new Error("No audio data");
-
-      const base64 = toBase64Standard(rawBase64);
-      const id = uuidv4();
-      const ext = mimeToExt(mime);
-      const filename = `audio/${id}.${ext}`;
-      await Filesystem.writeFile({ path: filename, directory: Directory.Data, data: base64, recursive: true });
-      const fileUri = await Filesystem.getUri({ path: filename, directory: Directory.Data });
-      const webPath = Capacitor.convertFileSrc(fileUri.uri);
-
-      const coords = positionRef.current ?? (await (async () => {
-        try {
-          const p = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 });
-          return { lat: p.coords.latitude, lon: p.coords.longitude };
-        } catch { return { lat: 0, lon: 0 }; }
-      })());
-
-      const note: Note = {
-        id, filePath: filename, webPath,
-        createdAt: new Date().toISOString(),
-        lat: coords.lat, lon: coords.lon,
-        label: new Date().toLocaleString(), durationMs: ms ?? elapsed, mimeType: mime,
-      };
-      const existing = await readNotes(); await writeNotes([note, ...existing]); onSaved(note);
-      setUiStatus("SAVED"); setStatus("Saved"); setTimeout(() => setStatus(null), 1200);
-    } catch {
-      setIsRecording(false); setUiStatus("FAILED_TO_RECORD"); setStatus("FAILED_TO_RECORD"); setTimeout(() => setStatus(null), 1800);
-      stopGeoWatch();
-    }
-  };
-
-  return (
-    <div className="center">
-      <div className="badge">{uiStatus === "RECORDING" ? "Recording…" : uiStatus === "FAILED_TO_RECORD" ? "FAILED_TO_RECORD" : status || ""}</div>
-      <button onClick={isRecording ? stop : start} className={`btn-circle${isRecording ? " rec" : ""}`}>
-        {isRecording ? "Stop" : "Record"}
-      </button>
-      <div className="badge" style={{ height: 24 }}>{isRecording ? msToClock(elapsed) : ""}</div>
-    </div>
-  );
+const BUNDLED_AVATAR_STORAGE_KEY = "mira-bundled-avatar";
+const KAI_OUTFIT_STORAGE_KEY = "kai-outfit";
+const SCENE_STORAGE_KEY = "mira-background-scene";
+const DEFAULT_VOICE_MODES: VoiceModes = { kai: "openai-built-in", mira: "openai-built-in" };
+const BUNDLED_AVATARS: Record<BundledAvatarId, BundledAvatar> = {
+  mira: {
+    id: "mira",
+    name: "米拉",
+    url: "/avatar/mira.vrm",
+    preview: "/avatar/mira-preview.png",
+    size: 13_445_912,
+    specification: "VRM 1.0",
+    description: "温暖、敏锐、有表现力",
+  },
+  kai: {
+    id: "kai",
+    name: "凯",
+    url: "/avatar/kai.vrm",
+    preview: "/avatar/kai-preview.png",
+    size: 12_426_972,
+    specification: "VRM 0.x",
+    description: "温柔、清爽、沉稳",
+  },
+};
+const KAI_OUTFITS: Record<KaiOutfitId, KaiOutfit> = {
+  everyday: {
+    id: "everyday",
+    name: "日常清爽",
+    description: "深青夹克",
+    url: "/avatar/kai.vrm",
+    preview: "/avatar/kai-preview.png",
+    size: 12_426_972,
+    colors: ["#0b4248", "#e3dac8", "#17191b"],
+  },
+  smart: {
+    id: "smart",
+    name: "城市通勤",
+    description: "海军蓝与雾蓝",
+    url: "/avatar/kai-smart.vrm",
+    preview: "/avatar/kai-smart-preview.png",
+    size: 12_043_368,
+    colors: ["#17253a", "#b5d4dc", "#30363b"],
+  },
+  weekend: {
+    id: "weekend",
+    name: "周末休闲",
+    description: "鼠尾草绿与斜挎包",
+    url: "/avatar/kai-weekend.vrm",
+    preview: "/avatar/kai-weekend-preview.png",
+    size: 12_226_032,
+    colors: ["#48675a", "#d7c4a3", "#4a2d1d"],
+  },
+};
+const SCENES: Record<SceneId, SceneOption> = {
+  office: { id: "office", name: "公司", description: "清爽工作室", image: "/scenes/office.jpg", portraitImage: "/scenes/office-portrait.jpg", position: "center center" },
+  gym: { id: "gym", name: "健身房", description: "明亮训练空间", image: "/scenes/gym.jpg", portraitImage: "/scenes/gym-portrait.jpg", position: "center center" },
+  beach: { id: "beach", name: "沙滩", description: "安静海湾", image: "/scenes/beach.jpg", portraitImage: "/scenes/beach-portrait.jpg", position: "center center" },
+  nature: { id: "nature", name: "自然风光", description: "湖畔林间", image: "/scenes/nature.jpg", portraitImage: "/scenes/nature-portrait.jpg", position: "center center" },
+  cafe: { id: "cafe", name: "咖啡馆", description: "午后咖啡馆", image: "/scenes/cafe.jpg", portraitImage: "/scenes/cafe-portrait.jpg", position: "center center" },
 };
 
-/* ────────────────────────────────────────────────────────────────────────────
-   Map View
-──────────────────────────────────────────────────────────────────────────── */
-type MapViewProps = {
-  notes: Note[];
-  onDelete: (id: string) => Promise<void>;
-};
+function readBundledAvatarId(): BundledAvatarId {
+  return localStorage.getItem(BUNDLED_AVATAR_STORAGE_KEY) === "mira" ? "mira" : "kai";
+}
 
-const MapView: React.FC<MapViewProps> = ({ notes, onDelete }) => {
-  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
+function readKaiOutfitId(): KaiOutfitId {
+  const stored = localStorage.getItem(KAI_OUTFIT_STORAGE_KEY);
+  return stored === "smart" || stored === "weekend" ? stored : "everyday";
+}
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true });
-        setCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-      } catch {
-        setCoords(null);
+function readSceneId(): SceneId {
+  const stored = localStorage.getItem(SCENE_STORAGE_KEY);
+  return stored === "office" || stored === "gym" || stored === "beach" || stored === "nature" ? stored : "cafe";
+}
+
+async function loadVoiceModes(): Promise<VoiceModes> {
+  const response = await fetch(apiUrl("/api/health"));
+  if (!response.ok) return DEFAULT_VOICE_MODES;
+  const body = await response.json();
+  const mode = (value: unknown): VoiceMode => value === "openai-custom" || value === "cartesia" ? value : "openai-built-in";
+  return { kai: mode(body.voices?.kai), mira: mode(body.voices?.mira) };
+}
+
+export default function App() {
+  const [bundledAvatarId, setBundledAvatarId] = useState<BundledAvatarId>(readBundledAvatarId);
+  const [kaiOutfitId, setKaiOutfitId] = useState<KaiOutfitId>(readKaiOutfitId);
+  const selectedKaiOutfit = KAI_OUTFITS[kaiOutfitId];
+  const baseBundledAvatar = BUNDLED_AVATARS[bundledAvatarId];
+  const bundledAvatar = bundledAvatarId === "kai"
+    ? {
+        ...baseBundledAvatar,
+        url: selectedKaiOutfit.url,
+        preview: selectedKaiOutfit.preview,
+        size: selectedKaiOutfit.size,
       }
-    })();
-  }, []);
+    : baseBundledAvatar;
+  const [sceneId, setSceneId] = useState<SceneId>(readSceneId);
+  const selectedScene = SCENES[sceneId];
+  const [command, setCommand] = useState<AvatarCommand>({ action: "wave", emotion: "happy", speaking: false, nonce: 1 });
+  const [realtimePhase, setRealtimePhase] = useState<RealtimePhase>("disconnected");
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [avatarPanelOpen, setAvatarPanelOpen] = useState(false);
+  const [scenePanelOpen, setScenePanelOpen] = useState(false);
+  const [avatarRecord, setAvatarRecord] = useState<StoredAvatar | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string>();
+  const [avatarNotice, setAvatarNotice] = useState("");
+  const [avatarNoticeKind, setAvatarNoticeKind] = useState<"success" | "error">("success");
+  const [isImportingAvatar, setIsImportingAvatar] = useState(false);
+  const [avatarReady, setAvatarReady] = useState(false);
+  const [speechNotice, setSpeechNotice] = useState("");
+  const [voiceModes, setVoiceModes] = useState<VoiceModes>(DEFAULT_VOICE_MODES);
+  const realtimeRef = useRef<RealtimeConversation | null>(null);
+  const customAudioRef = useRef<HTMLAudioElement | null>(null);
+  const customAudioUrlRef = useRef<string | null>(null);
+  const speechRequestRef = useRef(0);
+  const timersRef = useRef<number[]>([]);
+  const avatarUrlRef = useRef<string | undefined>(undefined);
+  const startVoiceRef = useRef<() => Promise<void>>(async () => undefined);
 
-  const located = useMemo(() => notes.filter(n => !(n.lat === 0 && n.lon === 0)), [notes]);
-  const unlocated = useMemo(() => notes.filter(n => (n.lat === 0 && n.lon === 0)), [notes]);
+  const personaName = avatarRecord?.name ?? bundledAvatar.name;
+  const isVoiceActive = realtimePhase !== "disconnected";
+  const externalVoiceEnabled = voiceModes[bundledAvatarId] === "cartesia";
+  const voiceStatusLabel: Record<RealtimePhase, string> = {
+    disconnected: "正在准备语音",
+    connecting: "正在连接...",
+    connected: "可以直接说话",
+    listening: "正在听...",
+    thinking: "正在思考...",
+    speaking: "正在回应...",
+  };
+  const voiceStatus = realtimePhase === "disconnected" && speechNotice ? "语音未连接" : voiceStatusLabel[realtimePhase];
+  const handleAvatarReady = useCallback(() => setAvatarReady(true), []);
 
-  const center = useMemo<LatLngTuple>(() => {
-    if (coords) return [coords.lat, coords.lon];
-    if (located.length > 0) return [located[0].lat, located[0].lon];
-    return [42.2808, -83.743];
-  }, [coords, located]);
+  const stageStyle = {
+    "--scene-image": `url(${selectedScene.image})`,
+    "--scene-image-portrait": `url(${selectedScene.portraitImage})`,
+    "--scene-position": selectedScene.position,
+  } as CSSProperties;
 
-  // Ensure Leaflet measures container after mount & on resize
   useEffect(() => {
-    const m = mapRef.current;
-    if (!m) return;
-    const kick = () => m.invalidateSize({ animate: false });
-    const id = requestAnimationFrame(kick);
-    window.addEventListener("resize", kick);
+    let active = true;
+    loadAvatar()
+      .then((stored) => {
+        if (!active || !stored) return;
+        realtimeRef.current?.disconnect();
+        realtimeRef.current = null;
+        const url = URL.createObjectURL(stored.blob);
+        avatarUrlRef.current = url;
+        setAvatarUrl(url);
+        setAvatarRecord(stored);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAvatarNoticeKind("error");
+        setAvatarNotice("无法恢复已保存的角色，当前已使用内置角色。");
+      });
+    loadVoiceModes()
+      .then((modes) => {
+        if (active) setVoiceModes(modes);
+      })
+      .catch(() => undefined);
+    for (const scene of Object.values(SCENES)) {
+      for (const source of [scene.image, scene.portraitImage]) {
+        const image = new Image();
+        image.src = source;
+      }
+    }
+    const timers = timersRef.current;
     return () => {
-      cancelAnimationFrame(id);
-      window.removeEventListener("resize", kick);
+      active = false;
+      timers.forEach(window.clearTimeout);
+      realtimeRef.current?.disconnect();
+      window.speechSynthesis?.cancel();
+      customAudioRef.current?.pause();
+      if (customAudioUrlRef.current) URL.revokeObjectURL(customAudioUrlRef.current);
+      if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current);
     };
   }, []);
 
-  // Keep map centered when `center` changes
-  useEffect(() => {
-    const m = mapRef.current;
-    if (!m) return;
-    m.setView(center);
-  }, [center[0], center[1]]);
-
-  // Fit bounds when we have located notes
-  useEffect(() => {
-    const m = mapRef.current;
-    if (!m || located.length === 0) return;
-    const b = L.latLngBounds(located.map(n => [n.lat, n.lon] as [number, number]));
-    m.fitBounds(b, { padding: [40, 40] });
-  }, [JSON.stringify(located.map(n => [n.lat, n.lon]))]);
-
-  const onPlay = async (note: Note) => {
-    if (!audioRef.current) return;
-    const a = audioRef.current;
-
-    // A) Try the stored webPath first
-    try {
-      a.pause();
-      a.src = note.webPath;
-      a.currentTime = 0;
-      a.load();
-      await a.play();
-      return; // success
-    } catch (e) {
-      console.warn("play failed on webPath:", e, { src: note.webPath, mime: note.mimeType });
-    }
-
-    // B) Fallback: read the file with Capacitor FS and build a Blob URL
-    try {
-      const rf = await Filesystem.readFile({ path: note.filePath, directory: Directory.Data });
-      const data = rf.data as string;               // base64 on native + web
-      const mime =
-        note.mimeType ||
-        (note.filePath.endsWith(".webm") ? "audio/webm" :
-          note.filePath.endsWith(".mp3") ? "audio/mpeg" :
-            note.filePath.endsWith(".wav") ? "audio/wav" : "audio/m4a");
-
-      const blob = base64ToBlob(data, mime);
-      const url = URL.createObjectURL(blob);
-
-      a.pause();
-      a.src = url;
-      a.currentTime = 0;
-      a.load();
-      await a.play();
-      return; // success
-    } catch (e2) {
-      console.warn("play failed on Blob fallback:", e2, { filePath: note.filePath, mime: note.mimeType });
-    }
-
-    // C) Still failing — surface something useful
-    alert("Couldn't play this memo. If this keeps happening, try re-recording one to verify playback.");
+  const activateAvatar = (stored: StoredAvatar) => {
+    realtimeRef.current?.disconnect();
+    realtimeRef.current = null;
+    if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current);
+    const url = URL.createObjectURL(stored.blob);
+    avatarUrlRef.current = url;
+    setAvatarReady(false);
+    setAvatarUrl(url);
+    setAvatarRecord(stored);
   };
 
-  // NEW: delete wrapper with confirm and stop playback if needed
-  const onDeleteClick = async (note: Note) => {
-    if (!confirm("Delete this memo? This will permanently remove the audio file.")) return;
+  const handleAvatarFile = async (file?: File) => {
+    if (!file) return;
+    setIsImportingAvatar(true);
+    setAvatarNotice("");
     try {
-      // stop if the same memo is playing
-      if (audioRef.current && audioRef.current.src === note.webPath) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
+      const details = await validateVrmFile(file);
+      const stored = await saveAvatar(file, details.specification, details.modelName);
+      activateAvatar(stored);
+      setAvatarNoticeKind("success");
+      setAvatarNotice(`${stored.name}已准备好。`);
+      animate("wave", "happy");
+    } catch (error) {
+      setAvatarNoticeKind("error");
+      setAvatarNotice(error instanceof Error ? error.message : "无法导入这个角色。");
+    } finally {
+      setIsImportingAvatar(false);
+    }
+  };
+
+  const selectBundledAvatar = async (id: BundledAvatarId) => {
+    const selected = BUNDLED_AVATARS[id];
+    realtimeRef.current?.disconnect();
+    realtimeRef.current = null;
+    try {
+      await removeAvatar();
+    } catch {
+      setAvatarNoticeKind("error");
+      setAvatarNotice("无法从此浏览器移除已保存的角色。");
+      return;
+    }
+    if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current);
+    avatarUrlRef.current = undefined;
+    setAvatarReady(false);
+    setAvatarUrl(undefined);
+    setAvatarRecord(null);
+    setBundledAvatarId(id);
+    localStorage.setItem(BUNDLED_AVATAR_STORAGE_KEY, id);
+    setAvatarNoticeKind("success");
+    setAvatarNotice(`${selected.name}已准备好。`);
+    animate("wave", "happy");
+  };
+
+  const selectKaiOutfit = (id: KaiOutfitId) => {
+    const outfit = KAI_OUTFITS[id];
+    setAvatarReady(false);
+    setKaiOutfitId(id);
+    localStorage.setItem(KAI_OUTFIT_STORAGE_KEY, id);
+    setAvatarNoticeKind("success");
+    setAvatarNotice(`已换上${outfit.name}穿搭。`);
+    animate("wave", "happy");
+  };
+
+  const selectScene = (id: SceneId) => {
+    setSceneId(id);
+    localStorage.setItem(SCENE_STORAGE_KEY, id);
+    setScenePanelOpen(false);
+  };
+
+  const animate = (action: AvatarAction, emotion: AvatarEmotion = command.emotion, speaking = false) => {
+    setCommand((current) => ({ action, emotion, speaking, nonce: current.nonce + 1 }));
+  };
+
+  const setSpeaking = (speaking: boolean, emotion?: AvatarEmotion) => {
+    setCommand((current) => ({ ...current, speaking, emotion: emotion ?? current.emotion }));
+  };
+
+  const speak = (
+    text: string,
+    emotion: AvatarEmotion,
+    leadAction: AvatarAction,
+    useExternalVoice = externalVoiceEnabled,
+  ) => {
+    const requestId = ++speechRequestRef.current;
+    animate(leadAction, emotion, false);
+    window.speechSynthesis?.cancel();
+    customAudioRef.current?.pause();
+    customAudioRef.current = null;
+    if (customAudioUrlRef.current) {
+      URL.revokeObjectURL(customAudioUrlRef.current);
+      customAudioUrlRef.current = null;
+    }
+
+    let browserSpeechStarted = false;
+    const finish = () => {
+      if (requestId !== speechRequestRef.current) return;
+      customAudioRef.current = null;
+      if (customAudioUrlRef.current) {
+        URL.revokeObjectURL(customAudioUrlRef.current);
+        customAudioUrlRef.current = null;
       }
-    } catch { }
-    await onDelete(note.id);
+      animate("idle", emotion, false);
+      if (realtimeRef.current) {
+        realtimeRef.current.resumeInput();
+        setRealtimePhase("connected");
+      }
+    };
+    const speakWithBrowser = () => {
+      if (browserSpeechStarted) return;
+      browserSpeechStarted = true;
+      const browserSpeech = window.speechSynthesis;
+      if (!browserSpeech) {
+        timersRef.current.push(window.setTimeout(finish, 900));
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "zh-CN";
+      utterance.rate = bundledAvatarId === "kai" ? 0.92 : 0.98;
+      utterance.pitch = bundledAvatarId === "kai" ? 0.98 : 1.04;
+      const voices = browserSpeech.getVoices();
+      const preferredVoice = bundledAvatarId === "kai"
+        ? /Yunxi|Yunyang|Kangkang|Xiaobei|Male|Chinese|Mandarin/i
+        : /Xiaoxiao|Xiaoyi|Huihui|Female|Chinese|Mandarin/i;
+      const chineseVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("zh"));
+      utterance.voice = chineseVoices.find((voice) => preferredVoice.test(voice.name)) ?? chineseVoices[0] ?? voices[0] ?? null;
+      utterance.onstart = () => {
+        realtimeRef.current?.pauseInput();
+        setSpeaking(true, emotion);
+        if (realtimeRef.current) setRealtimePhase("speaking");
+      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      const gestureDelay = leadAction === "talk" || leadAction === "idle" ? 0 : 380;
+      timersRef.current.push(window.setTimeout(() => {
+        if (requestId === speechRequestRef.current) browserSpeech.speak(utterance);
+      }, gestureDelay));
+    };
+
+    if (!soundEnabled) {
+      timersRef.current.push(window.setTimeout(finish, 900));
+      return;
+    }
+    if (!useExternalVoice) {
+      speakWithBrowser();
+      return;
+    }
+
+    void (async () => {
+      try {
+        const response = await fetch(apiUrl("/api/voice/speech"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ persona: bundledAvatarId, text, emotion }),
+        });
+        if (!response.ok) throw new Error("定制声线暂时不可用。");
+        const audioUrl = URL.createObjectURL(await response.blob());
+        if (requestId !== speechRequestRef.current) {
+          URL.revokeObjectURL(audioUrl);
+          return;
+        }
+        const audio = new Audio(audioUrl);
+        customAudioRef.current = audio;
+        customAudioUrlRef.current = audioUrl;
+        audio.onplay = () => {
+          realtimeRef.current?.pauseInput();
+          setSpeaking(true, emotion);
+          if (realtimeRef.current) setRealtimePhase("speaking");
+        };
+        audio.onended = finish;
+        audio.onerror = () => {
+          if (requestId === speechRequestRef.current) speakWithBrowser();
+        };
+        await audio.play();
+      } catch {
+        if (requestId === speechRequestRef.current) speakWithBrowser();
+      }
+    })();
+  };
+
+  const startVoice = async () => {
+    if (realtimeRef.current) return;
+    setSpeechNotice("");
+    setAvatarPanelOpen(false);
+    setScenePanelOpen(false);
+    window.speechSynthesis?.cancel();
+    customAudioRef.current?.pause();
+    customAudioRef.current = null;
+    if (customAudioUrlRef.current) {
+      URL.revokeObjectURL(customAudioUrlRef.current);
+      customAudioUrlRef.current = null;
+    }
+    speechRequestRef.current += 1;
+    let useExternalVoice = externalVoiceEnabled;
+    try {
+      const currentModes = await loadVoiceModes();
+      setVoiceModes(currentModes);
+      useExternalVoice = currentModes[bundledAvatarId] === "cartesia";
+    } catch {
+      // Keep the last known voice mode if the health check is temporarily unavailable.
+    }
+    const realtime = new RealtimeConversation({
+      onPhase: (phase) => {
+        setRealtimePhase(phase);
+        if (phase === "listening") {
+          animate("listening", "neutral");
+        } else if (phase === "thinking") {
+          animate("thinking", "thoughtful");
+        } else if (phase === "speaking") {
+          setCommand((current) => ({
+            action: current.action === "thinking" || current.action === "listening" || current.action === "idle" ? "talk" : current.action,
+            emotion: current.emotion === "neutral" ? "happy" : current.emotion,
+            speaking: true,
+            nonce: current.nonce + 1,
+          }));
+        } else if (phase === "connected" || phase === "disconnected") {
+          animate("idle", "neutral", false);
+        }
+      },
+      onAssistantTranscript: (text) => {
+        const reaction = deriveAvatarReaction(text);
+        if (useExternalVoice) speak(text, reaction.emotion, reaction.action, true);
+        else animate(reaction.action, reaction.emotion, true);
+      },
+      onError: (message) => {
+        setSpeechNotice(message);
+        animate("idle", "neutral", false);
+      },
+    });
+    realtimeRef.current = realtime;
+    try {
+      await realtime.connect(bundledAvatarId, !soundEnabled, useExternalVoice);
+    } catch (error) {
+      if (realtimeRef.current === realtime) realtimeRef.current = null;
+      setRealtimePhase("disconnected");
+      animate("idle", "neutral", false);
+      const errorName = error instanceof DOMException ? error.name : "";
+      const notice = errorName === "NotAllowedError" || errorName === "SecurityError"
+        ? "麦克风权限已被阻止。请在浏览器的网站设置中允许麦克风访问，然后重试。"
+        : errorName === "NotFoundError"
+          ? "未找到麦克风。请连接输入设备后重试。"
+          : error instanceof Error
+            ? error.message
+            : "无法启动实时语音会话。";
+      setSpeechNotice(notice);
+    }
+  };
+
+  startVoiceRef.current = startVoice;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void startVoiceRef.current(), 350);
+    return () => window.clearTimeout(timer);
+  }, [personaName]);
+
+  useEffect(() => {
+    const reconnectWhenActive = () => {
+      if (document.visibilityState === "visible" && !realtimeRef.current) {
+        void startVoiceRef.current();
+      }
+    };
+    document.addEventListener("visibilitychange", reconnectWhenActive);
+    window.addEventListener("online", reconnectWhenActive);
+    return () => {
+      document.removeEventListener("visibilitychange", reconnectWhenActive);
+      window.removeEventListener("online", reconnectWhenActive);
+    };
+  }, []);
+
+  const toggleSound = () => {
+    setSoundEnabled((enabled) => {
+      const next = !enabled;
+      if (!next) {
+        speechRequestRef.current += 1;
+        window.speechSynthesis?.cancel();
+        customAudioRef.current?.pause();
+        customAudioRef.current = null;
+        if (customAudioUrlRef.current) {
+          URL.revokeObjectURL(customAudioUrlRef.current);
+          customAudioUrlRef.current = null;
+        }
+        if (externalVoiceEnabled && realtimeRef.current) {
+          realtimeRef.current.resumeInput();
+          setRealtimePhase("connected");
+        }
+        animate("idle", "neutral", false);
+      }
+      realtimeRef.current?.setMuted(!next || externalVoiceEnabled);
+      return next;
+    });
   };
 
   return (
-    <div style={{ height: "100%", position: "relative", minHeight: 0 }}>
-      <div style={{ position: "absolute", inset: 0 }}>
-        <MapContainer
-          ref={mapRef}
-          center={center}
-          zoom={15}
-          maxZoom={22}
-          zoomSnap={0.25}
-          zoomDelta={0.25}
-          style={{ height: "100%", width: "100%" }}
-          preferCanvas
-        >
-          <TileLayer
-            attribution="© OpenStreetMap contributors"
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            maxNativeZoom={19}
-          />
-
-          <MarkerClusterGroup spiderfyOnMaxZoom showCoverageOnHover={false} maxClusterRadius={40}>
-
-            {located.map((n) => (
-              <Marker key={n.id} position={[n.lat, n.lon]}>
-                <Popup>
-                  <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 14 }}>
-                    {n.label || new Date(n.createdAt).toLocaleString()}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#a3a3a3", marginBottom: 10 }}>
-                    {(n.mimeType || "").replace("audio/", "").toUpperCase()} · {n.durationMs ? msToClock(n.durationMs) : ""}
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      onClick={() => onPlay(n)}
-                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #404040", background: "#0a0a0a", color: "#e5e5e5" }}
-                    >
-                      ▶ Play
-                    </button>
-                    <button
-                      onClick={() => onDeleteClick(n)}
-                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #7f1d1d", background: "#1f2937", color: "#fca5a5", fontWeight: 700 }}
-                    >
-                      🗑 Delete
-                    </button>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MarkerClusterGroup>
-
-        </MapContainer>
-      </div>
-
-      {/* Unlocated tray: add delete buttons too */}
-      {unlocated.length > 0 && (
-        <div style={{ position: "absolute", left: 12, right: 12, bottom: 76, background: "rgba(10,10,10,0.92)", border: "1px solid #404040", borderRadius: 12, padding: 10, fontSize: 14 }}>
-          <div style={{ marginBottom: 6, color: "#e5e5e5" }}>
-            Saved {unlocated.length} memo{unlocated.length > 1 ? "s" : ""} without location:
+    <main className="app-shell">
+      <section
+        className="avatar-stage"
+        style={stageStyle}
+        aria-label={`${personaName}角色`}
+        data-scene={sceneId}
+        data-avatar-action={command.action}
+        data-avatar-emotion={command.emotion}
+        data-voice-phase={realtimePhase}
+      >
+        <header className="topbar">
+          <div className="brand-lockup">
+            <span className="brand-mark"><Sparkles size={16} strokeWidth={2.2} /></span>
+            <div>
+              <h1>{personaName}</h1>
+              <span className={`presence ${isVoiceActive ? "live" : ""}`}><i /> {voiceStatus}</span>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {unlocated.slice(0, 8).map((n) => (
-              <div key={n.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button onClick={() => onPlay(n)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #404040", background: "#0a0a0a", color: "#e5e5e5" }}>
-                  {n.label || new Date(n.createdAt).toLocaleString()}
+          <div className="topbar-actions">
+            <button
+              className="icon-button"
+              onClick={() => {
+                setAvatarPanelOpen(false);
+                setScenePanelOpen((open) => !open);
+              }}
+              aria-label={`选择场景，当前${selectedScene.name}`}
+              title="选择场景"
+            >
+              {scenePanelOpen ? <X size={20} /> : <MapPin size={19} />}
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => {
+                setScenePanelOpen(false);
+                setAvatarPanelOpen((open) => !open);
+              }}
+              aria-label="选择角色"
+              title="选择角色"
+            >
+              {avatarPanelOpen ? <X size={20} /> : <UserRoundCog size={19} />}
+            </button>
+            <button className="icon-button" onClick={toggleSound} aria-label={soundEnabled ? "静音" : "开启声音"} title={soundEnabled ? "静音" : "开启声音"}>
+              {soundEnabled ? <Volume2 size={19} /> : <VolumeX size={19} />}
+            </button>
+          </div>
+        </header>
+
+        <div className="scene-wrap">
+          <div className="scene-background" aria-hidden="true" />
+          <div className="scene-wash" aria-hidden="true" />
+          <AvatarScene command={command} modelUrl={avatarUrl ?? bundledAvatar.url} onReady={handleAvatarReady} />
+          {!avatarReady && <div className="avatar-loading" role="status"><span />正在准备{personaName}</div>}
+          <div className="scene-glow" />
+        </div>
+
+        <div className={`voice-indicator ${realtimePhase}`} role="status" aria-label={voiceStatus}>
+          <i /><i /><i /><i />
+        </div>
+        {speechNotice && (
+          <div className="speech-notice" role="alert">
+            <AlertCircle size={15} />
+            <span>{speechNotice}</span>
+            <button type="button" onClick={() => void startVoice()} aria-label="重新连接语音" title="重新连接语音">
+              <RefreshCw size={16} />
+            </button>
+          </div>
+        )}
+      </section>
+
+      <aside className={`scene-panel ${scenePanelOpen ? "open" : ""}`} aria-label="场景选择">
+        <div className="panel-header">
+          <div>
+            <span className="panel-kicker">场景</span>
+            <h2>选择相处的地方</h2>
+          </div>
+          <button className="icon-button panel-close" onClick={() => setScenePanelOpen(false)} aria-label="关闭场景选择"><X size={19} /></button>
+        </div>
+        <div className="scene-panel-body">
+          <div className="scene-grid">
+            {(Object.values(SCENES) as SceneOption[]).map((scene) => {
+              const active = scene.id === sceneId;
+              return (
+                <button
+                  key={scene.id}
+                  type="button"
+                  className={`scene-option ${active ? "active" : ""}`}
+                  aria-label={`${scene.name} ${scene.description}`}
+                  aria-pressed={active}
+                  onClick={() => selectScene(scene.id)}
+                >
+                  <img src={scene.portraitImage} alt="" />
+                  <span><strong>{scene.name}</strong><small>{scene.description}</small></span>
+                  {active && <CheckCircle2 size={18} aria-hidden="true" />}
                 </button>
-                <button onClick={() => onDeleteClick(n)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #7f1d1d", background: "#1f2937", color: "#fca5a5" }}>
-                  Delete
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
-      )}
+      </aside>
 
-      <audio
-        ref={audioRef}
-        preload="metadata"
-        playsInline
-        controls   // keep for now; remove later if you want
-        style={{ position: "fixed", left: 8, right: 8, bottom: 8, opacity: 0.001, pointerEvents: "none", height: 28 }}
-      />
-    </div>
-  );
-};
+      <aside className={`avatar-panel ${avatarPanelOpen ? "open" : ""}`} aria-label="角色库">
+        <div className="panel-header">
+          <div>
+            <span className="panel-kicker">角色</span>
+            <h2>选择陪伴角色</h2>
+          </div>
+          <button className="icon-button panel-close" onClick={() => setAvatarPanelOpen(false)} aria-label="关闭角色库"><X size={19} /></button>
+        </div>
 
-/* ────────────────────────────────────────────────────────────────────────────
-   App Shell
-──────────────────────────────────────────────────────────────────────────── */
-export default function App() {
-  const [tab, setTab] = useState<"record" | "map">("record");
-  const [notes, setNotes] = useState<Note[]>([]);
+        <div className="avatar-panel-body">
+          <section className="avatar-current" aria-label="当前角色">
+            <div className={`avatar-preview-mark ${avatarRecord ? "custom" : "image"}`}>
+              {avatarRecord ? <UserRoundCog size={26} /> : <img src={bundledAvatar.preview} alt="" />}
+            </div>
+            <div>
+              <span>当前角色</span>
+              <h3>{personaName}</h3>
+              <p>{avatarRecord ? `${avatarRecord.specification} / ${formatAvatarSize(avatarRecord.size)}` : `${bundledAvatar.specification} / ${formatAvatarSize(bundledAvatar.size)}`}</p>
+            </div>
+          </section>
 
-  useEffect(() => { (async () => setNotes(await readNotes()))(); }, []);
+          <section className="avatar-choices" aria-label="内置角色">
+            <span className="avatar-section-label">内置角色</span>
+            <div className="avatar-choice-grid">
+              {(Object.values(BUNDLED_AVATARS) as BundledAvatar[]).map((avatar) => {
+                const active = !avatarRecord && bundledAvatarId === avatar.id;
+                return (
+                  <button
+                    key={avatar.id}
+                    type="button"
+                    className={`avatar-choice ${active ? "active" : ""}`}
+                    aria-pressed={active}
+                    onClick={() => void selectBundledAvatar(avatar.id)}
+                  >
+                    <img src={avatar.preview} alt="" />
+                    <span>
+                      <strong>{avatar.name}</strong>
+                      <small>{avatar.description}</small>
+                    </span>
+                    {active && <CheckCircle2 size={18} aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
 
-  const handleSaved = (note: Note) => setNotes((p) => [note, ...p]);
+          {!avatarRecord && bundledAvatarId === "kai" && (
+            <section className="outfit-selector" aria-label="凯的穿搭">
+              <span className="avatar-section-label">凯的穿搭</span>
+              <div className="outfit-grid">
+                {(Object.values(KAI_OUTFITS) as KaiOutfit[]).map((outfit) => {
+                  const active = kaiOutfitId === outfit.id;
+                  return (
+                    <button
+                      key={outfit.id}
+                      type="button"
+                      className={`outfit-option ${active ? "active" : ""}`}
+                      aria-pressed={active}
+                      onClick={() => selectKaiOutfit(outfit.id)}
+                    >
+                      <img src={outfit.preview} alt="" />
+                      <strong>{outfit.name}</strong>
+                      <small>{outfit.description}</small>
+                      <span className="outfit-swatches" aria-hidden="true">
+                        {outfit.colors.map((color) => <i key={color} style={{ backgroundColor: color }} />)}
+                      </span>
+                      {active && <CheckCircle2 size={17} aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
-  // NEW: delete by id (removes audio file + updates index)
-  const handleDelete = async (id: string) => {
-    const all = await readNotes();
-    const target = all.find(n => n.id === id);
+          <div className="avatar-import-actions">
+            <label className={`avatar-import-button ${isImportingAvatar ? "disabled" : ""}`}>
+              <Upload size={18} />
+              <span>{isImportingAvatar ? "正在导入..." : "导入 VRM"}</span>
+              <input
+                type="file"
+                accept=".vrm,model/gltf-binary,application/octet-stream"
+                disabled={isImportingAvatar}
+                onChange={(event) => {
+                  void handleAvatarFile(event.target.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <button className="avatar-reset-button" onClick={() => void selectBundledAvatar(bundledAvatarId)} disabled={!avatarRecord || isImportingAvatar}>
+              <RotateCcw size={17} />
+              <span>恢复所选角色</span>
+            </button>
+          </div>
 
-    // try to delete audio file; continue even if it fails
-    if (target) {
-      try {
-        await Filesystem.deleteFile({ path: target.filePath, directory: Directory.Data });
-        // Revoke blob URL to release memory (web)
-        if (target.webPath?.startsWith("blob:")) {
-          try { URL.revokeObjectURL(target.webPath); } catch { }
-        }
-      } catch (e) {
-        console.warn("deleteFile failed (continuing):", e);
-      }
-    }
-
-    const next = all.filter(n => n.id !== id);
-    await writeNotes(next);
-    setNotes(next);
-  };
-
-  return (
-    <div className="app">
-      <div className="header">{tab === "record" ? "New Voice Memo" : "Your Memos"}</div>
-      <main className="content">
-        {tab === "record"
-          ? <RecordView onSaved={handleSaved} />
-          : <MapView notes={notes} onDelete={handleDelete} />  /* ← pass it in */
-        }
-      </main>
-      <div className="footer">
-        <button className={`tab ${tab === "record" ? "active" : ""}`} onClick={() => setTab("record")}>Record</button>
-        <button className={`tab ${tab === "map" ? "active" : ""}`} onClick={() => setTab("map")}>Map</button>
-      </div>
-    </div>
+          {avatarNotice && (
+            <p className={`avatar-notice ${avatarNoticeKind}`} role="status">
+              {avatarNoticeKind === "success" ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+              <span>{avatarNotice}</span>
+            </p>
+          )}
+        </div>
+      </aside>
+    </main>
   );
 }
-
